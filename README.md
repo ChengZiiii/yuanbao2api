@@ -135,7 +135,7 @@ curl http://localhost:3000/v1/models
 | 模型 ID | 名称 | 说明 |
 |---------|------|------|
 | `deep_seek_v3` / `deepseek` | DeepSeek V3.2 | 适合深度推理、代码生成 |
-| `hunyuan` | Hunyuan T1 | 腾讯混元，日常对话、创意写作 |
+| `hunyuan` | Hy3 preview | 腾讯混元，日常对话、创意写作 |
 | `gpt_175B_0404` | GPT 175B | 元宝内部模型标识 |
 
 不指定模型时默认使用 DeepSeek V3.2。

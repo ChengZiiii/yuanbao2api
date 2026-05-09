@@ -16,24 +16,24 @@ func HandleOpenAIModels(c *gin.Context) {
 		Object: "list",
 		Data: []models.ModelInfo{
 			{
-				ID:          "DeepSeek-V3.2",
+				ID:          "deep_seek_v3",
 				Object:      "model",
 				Created:     1704067200,
 				OwnedBy:     "yuanbao",
 				Permission:  []interface{}{},
-				Root:        "DeepSeek-V3.2",
+				Root:        "deep_seek_v3",
 				Parent:      nil,
-				Description: "DeepSeek V3.2 - 适合深度思考和复杂推理任务",
+				Description: "DeepSeek - 适合深度思考和复杂推理任务",
 			},
 			{
-				ID:          "hunyuan-t1",
+				ID:          "hunyuan",
 				Object:      "model",
 				Created:     1704067200,
 				OwnedBy:     "yuanbao",
 				Permission:  []interface{}{},
-				Root:        "hunyuan-t1",
+				Root:        "hunyuan_gpt_175B_0404",
 				Parent:      nil,
-				Description: "Hunyuan T1 - 腾讯混元大模型，全能处理",
+				Description: "Hy3 preview - 腾讯混元大模型，全能处理",
 			},
 			{
 				ID:          "gpt_175B_0404",
@@ -80,13 +80,13 @@ var MODEL_MAPPING = map[string]ModelConfig{
 	"hunyuan-t1": {
 		ChatModelID: "hunyuan_gpt_175B_0404",
 		Model:       "gpt_175B_0404",
-		Name:        "Hunyuan T1",
+		Name:        "Hy3 preview",
 		Description: "腾讯混元大模型，全能处理",
 	},
 	"hunyuan": {
 		ChatModelID: "hunyuan_gpt_175B_0404",
 		Model:       "gpt_175B_0404",
-		Name:        "Hunyuan T1",
+		Name:        "Hy3 preview",
 		Description: "腾讯混元大模型，全能处理",
 	},
 	"gpt_175B_0404": {
@@ -131,7 +131,7 @@ func buildYuanbaoRequest(prompt string, modelConfig ModelConfig, useDeepThinking
 	if useDeepThinking {
 		if strings.Contains(modelConfig.ChatModelID, "hunyuan") {
 			chatModelID = "hunyuan_t1"
-			modelID = "hunyuan_gpt_175B_0404"
+			modelID = "hunyuan_t1"
 			subModelID = "hunyuan_t1"
 		} else {
 			chatModelID = "deep_seek"
