@@ -77,6 +77,7 @@ func main() {
 		config.GET("/status", api.HandleStatus)
 		config.GET("/env", api.HandleEnv)
 		config.GET("/logs", api.HandleLogs)
+		config.POST("/restart", api.HandleRestart)
 	}
 
 	// Start server
