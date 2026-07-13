@@ -66,6 +66,12 @@ const App = {
         if (ts) ts.value = this.config.defaultModel;
         const ai = document.getElementById('agentIdInput');
         if (ai) ai.value = this.config.agentId || '';
+        const mc = document.getElementById('maxConcurrencyInput');
+        if (mc) mc.value = this.config.maxConcurrency ?? '';
+        const qt = document.getElementById('queueTimeoutInput');
+        if (qt) qt.value = this.config.queueTimeoutSeconds ?? '';
+        const cd = document.getElementById('cooldownInput');
+        if (cd) cd.value = this.config.requestCooldownMs ?? '';
     },
 
     async checkStatus() {
@@ -293,6 +299,92 @@ const App = {
                 return '<tr><td>' + (log.time || '') + '</td><td><span class="method-tag">' + (log.method || '') + '</span></td><td>' + (log.model || '-') + '</td><td><span class="' + cls + '">' + (log.status || '') + '</span></td><td>' + (log.duration || '') + '</td><td style="color:#666;">' + (log.note || '') + '</td></tr>';
             }).join('');
         } catch(e) {}
+    },
+
+    async saveConcurrency() {
+        const maxC = parseInt(document.getElementById('maxConcurrencyInput').value);
+        const qTimeout = parseInt(document.getElementById('queueTimeoutInput').value);
+        const cooldown = parseInt(document.getElementById('cooldownInput').value);
+
+        if (!maxC || maxC < 1) {
+            alert('MAX_CONCURRENCY 必须 ≥ 1');
+            return;
+        }
+        if (!qTimeout || qTimeout < 1) {
+            alert('QUEUE_TIMEOUT_SECONDS 必须 ≥ 1');
+            return;
+        }
+        if (isNaN(cooldown) || cooldown < 0) {
+            alert('REQUEST_COOLDOWN_MS 必须 ≥ 0');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: this._authHeaders(),
+                body: JSON.stringify({
+                    maxConcurrency: maxC,
+                    queueTimeoutSeconds: qTimeout,
+                    requestCooldownMs: cooldown,
+                }),
+            });
+            if (!res.ok) {
+                alert('保存失败: HTTP ' + res.status);
+                return;
+            }
+            alert('已保存。点击"重启服务"按钮生效。');
+        } catch (e) {
+            alert('保存失败: ' + e.message);
+        }
+    },
+
+    async restartService() {
+        if (!confirm('确认重启服务？所有进行中的请求会被中断。')) return;
+
+        const statusEl = document.getElementById('restartStatus');
+        statusEl.textContent = '重启中...';
+        statusEl.style.color = '#ffa500';
+
+        try {
+            const res = await fetch('/api/restart', {
+                method: 'POST',
+                headers: this._authHeaders(),
+            });
+            if (!res.ok) {
+                statusEl.textContent = '重启请求失败: HTTP ' + res.status;
+                statusEl.style.color = '#f44';
+                return;
+            }
+        } catch (e) {
+            // 网络中断属于正常情况——服务可能已退出
+            console.log('重启请求网络中断（预期行为）:', e.message);
+        }
+
+        // 轮询 /health 检测恢复
+        const deadline = Date.now() + 30000;
+        const poll = async () => {
+            if (Date.now() > deadline) {
+                statusEl.textContent = '重启超时（30s），请手动检查';
+                statusEl.style.color = '#f44';
+                return;
+            }
+            try {
+                const r = await fetch('/health', { cache: 'no-store' });
+                if (r.ok) {
+                    statusEl.textContent = '✅ 服务已恢复';
+                    statusEl.style.color = '#0f0';
+                    // 重新加载配置 + 状态
+                    this.loadConfig();
+                    this.loadStatus();
+                    return;
+                }
+            } catch (e) {
+                // 服务还启动中
+            }
+            setTimeout(poll, 1000);
+        };
+        setTimeout(poll, 1500); // 给重启 bat 留启动时间
     },
 };
 

@@ -125,6 +125,25 @@
                 </div>
             </div>
             <div class="section">
+                <div class="section-title">并发参数（需重启生效）</div>
+                <div class="config-row">
+                    <span class="config-label">MAX_CONCURRENCY:</span>
+                    <input type="number" id="maxConcurrencyInput" min="1" class="config-input" style="width:100px;">
+                </div>
+                <div class="config-row">
+                    <span class="config-label">QUEUE_TIMEOUT_SECONDS:</span>
+                    <input type="number" id="queueTimeoutInput" min="1" class="config-input" style="width:100px;">
+                </div>
+                <div class="config-row">
+                    <span class="config-label">REQUEST_COOLDOWN_MS:</span>
+                    <input type="number" id="cooldownInput" min="0" class="config-input" style="width:100px;">
+                </div>
+                <div style="color:#ffa500;font-size:12px;margin:8px 0;">⚠ 修改后需重启服务才能生效</div>
+                <button class="btn" onclick="App.saveConcurrency()">保存并发参数</button>
+                <button class="btn btn-danger" onclick="App.restartService()" style="margin-left:8px;">🔄 重启服务</button>
+                <span id="restartStatus" style="margin-left:12px;font-size:13px;"></span>
+            </div>
+            <div class="section">
                 <div class="section-title">功能配置</div>
                 <div class="toggle-group">
                     <div class="toggle-item">

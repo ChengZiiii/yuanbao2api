@@ -173,6 +173,14 @@
             border: 1px solid #333;
         }
 
+        .btn-danger {
+            background: #d33;
+            color: #fff;
+        }
+        .btn-danger:hover {
+            background: #b22;
+        }
+
         .status {
             display: inline-flex;
             align-items: center;
