@@ -21,10 +21,9 @@
         </div>
 
         <div class="panel active" id="panel-dashboard">
-            <!-- 服务状态 -->
-            <div class="section">
+            <div class="section" id="statusSection">
                 <div class="section-title">服务状态</div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
                     <div class="status" id="status">
                         <span class="status-dot"></span>
                         <span>检查中...</span>
@@ -33,70 +32,41 @@
                 </div>
             </div>
 
-            <!-- 功能配置 -->
             <div class="section">
-                <div class="section-title">功能配置</div>
-                <div class="toggle-group">
-                    <div class="toggle-item">
-                        <div class="toggle" id="deepThinkingToggle" onclick="App.toggleFeature('deepThinking')">
-                            <span class="toggle-label">深度思考</span>
-                            <div class="toggle-switch"></div>
+                <div class="section-title">并发仪表盘</div>
+                <div class="status-cards">
+                    <div class="stat-card">
+                        <div class="stat-label">IN-FLIGHT</div>
+                        <div class="stat-value-row">
+                            <span class="stat-num" id="inflightNum">0</span>
+                            <span class="stat-divider">/</span>
+                            <span class="stat-max" id="maxConcurrency">1</span>
                         </div>
+                        <div class="bar-bg"><div class="bar-fill" id="usageBar"></div></div>
+                        <div class="stat-sub" id="usagePct">0%</div>
                     </div>
-                    <div class="toggle-item">
-                        <div class="toggle" id="internetSearchToggle" onclick="App.toggleFeature('internetSearch')">
-                            <span class="toggle-label">联网搜索</span>
-                            <div class="toggle-switch"></div>
-                        </div>
+                    <div class="stat-card">
+                        <div class="stat-label">WAITING（排队中）</div>
+                        <div class="stat-num warn" id="waitingNum">0</div>
                     </div>
-                </div>
-            </div>
-
-            <!-- 模型选择 -->
-            <div class="section">
-                <div class="section-title">模型配置</div>
-                <div class="form-group">
-                    <label>默认模型</label>
-                    <select id="modelSelect">
-                        <option value="deep_seek_v3">DeepSeek - 深度思考</option>
-                        <option value="hunyuan">Hunyuan - 全能处理</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- API 测试 -->
-            <div class="section">
-                <div class="section-title">API 测试</div>
-                <div class="form-group">
-                    <label>测试消息</label>
-                    <input type="text" id="testMessage" placeholder="输入测试消息..." value="你好">
-                </div>
-                <div style="margin-bottom: 16px;">
-                    <button class="btn" onclick="App.testAPI()">发送测试</button>
-                </div>
-                <div class="test-section">
-                    <div>
-                        <label>请求</label>
-                        <div class="test-result" id="requestResult">等待测试...</div>
-                    </div>
-                    <div>
-                        <label>响应</label>
-                        <div class="test-result" id="responseResult">等待测试...</div>
+                    <div class="stat-card">
+                        <div class="stat-label">COOLDOWN</div>
+                        <div class="stat-num muted" id="cooldownNum">0ms</div>
                     </div>
                 </div>
             </div>
 
-            <!-- API 信息 -->
             <div class="section">
-                <div class="section-title">API 信息</div>
-                <div class="form-group">
-                    <label>API 端点</label>
-                    <input type="text" readonly value="http://localhost:3000/v1/chat/completions">
-                </div>
-                <div class="form-group">
-                    <label>模型列表端点</label>
-                    <input type="text" readonly value="http://localhost:3000/v1/models">
-                </div>
+                <div class="section-title">请求历史</div>
+                <p class="section-subtitle">最近 200 条（内存缓冲，重启即失）</p>
+                <table class="log-table">
+                    <thead>
+                        <tr><th>时间</th><th>方法</th><th>模型</th><th>状态</th><th>耗时</th><th>备注</th></tr>
+                    </thead>
+                    <tbody id="logBody">
+                        <tr><td colspan="6" style="color:#666;text-align:center;">暂无数据</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
 

@@ -5,7 +5,10 @@ const App = {
     init() {
         this.loadConfig();
         this.checkStatus();
+        this.loadStatus();
+        this.loadLogs();
         setInterval(() => this.checkStatus(), 30000);
+        setInterval(() => this.loadStatus(), 2000);
         // tab switching
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', (e) => this.switchTab(tab.dataset.panel));
@@ -16,6 +19,7 @@ const App = {
         this.currentTab = name;
         document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
         document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+        if (name === 'dashboard') { this.loadStatus(); this.loadLogs(); }
     },
 
     async loadConfig() {
@@ -90,6 +94,38 @@ const App = {
         } catch (error) {
             document.getElementById('responseResult').textContent = '错误: ' + error.message;
         }
+    },
+
+    async loadStatus() {
+        try {
+            const res = await fetch('/api/status');
+            const data = await res.json();
+            document.getElementById('inflightNum').textContent = data.inflight ?? 0;
+            document.getElementById('maxConcurrency').textContent = data.maxConcurrency ?? 1;
+            document.getElementById('waitingNum').textContent = data.waiting ?? 0;
+            document.getElementById('cooldownNum').textContent = (data.requestCooldownMs ?? 0) + 'ms';
+            const maxC = data.maxConcurrency || 1;
+            const pct = Math.round((data.inflight || 0) / maxC * 100);
+            document.getElementById('usageBar').style.width = Math.min(pct, 100) + '%';
+            document.getElementById('usagePct').textContent = Math.min(pct, 100) + '%';
+        } catch(e) {}
+    },
+
+    async loadLogs() {
+        try {
+            const res = await fetch('/api/logs');
+            const logs = await res.json();
+            const tbody = document.getElementById('logBody');
+            if (!tbody) return;
+            if (!logs || logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="color:#666;text-align:center;">暂无数据</td></tr>';
+                return;
+            }
+            tbody.innerHTML = logs.map(log => {
+                const cls = log.status >= 400 ? 'status-bad' : log.status >= 300 ? 'status-warn' : 'status-ok';
+                return '<tr><td>' + (log.time || '') + '</td><td><span class="method-tag">' + (log.method || '') + '</span></td><td>' + (log.model || '-') + '</td><td><span class="' + cls + '">' + (log.status || '') + '</span></td><td>' + (log.duration || '') + '</td><td style="color:#666;">' + (log.note || '') + '</td></tr>';
+            }).join('');
+        } catch(e) {}
     },
 };
 
