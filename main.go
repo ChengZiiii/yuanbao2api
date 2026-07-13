@@ -94,7 +94,7 @@ func main() {
 		port = "3000"
 	}
 
-	// Initialize the strict concurrency limiter from env and report it.
+	// Initialize the strict concurrency limiter from persisted overrides/env and report it.
 	rl := api.InitRateLimiter()
 	log.Printf("并发控制已启用: 最大并发=%d, 队列超时=%d秒, 释放冷却=%d毫秒",
 		rl.MaxConcurrency(), int(rl.QueueTimeout().Seconds()), int(rl.Cooldown().Milliseconds()))
