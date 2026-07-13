@@ -302,20 +302,23 @@ const App = {
     },
 
     async saveConcurrency() {
-        const maxC = parseInt(document.getElementById('maxConcurrencyInput').value);
-        const qTimeout = parseInt(document.getElementById('queueTimeoutInput').value);
-        const cooldown = parseInt(document.getElementById('cooldownInput').value);
+        const maxCRaw = document.getElementById('maxConcurrencyInput').value;
+        const qTimeoutRaw = document.getElementById('queueTimeoutInput').value;
+        const cooldownRaw = document.getElementById('cooldownInput').value;
+        const maxC = Number(maxCRaw);
+        const qTimeout = Number(qTimeoutRaw);
+        const cooldown = Number(cooldownRaw);
 
-        if (!maxC || maxC < 1) {
-            alert('MAX_CONCURRENCY 必须 ≥ 1');
+        if (maxCRaw.trim() === '' || !Number.isInteger(maxC) || maxC < 1 || maxC > 1000) {
+            alert('MAX_CONCURRENCY 必须是 1 到 1000 之间的整数');
             return;
         }
-        if (!qTimeout || qTimeout < 1) {
-            alert('QUEUE_TIMEOUT_SECONDS 必须 ≥ 1');
+        if (qTimeoutRaw.trim() === '' || !Number.isInteger(qTimeout) || qTimeout < 1 || qTimeout > 3600) {
+            alert('QUEUE_TIMEOUT_SECONDS 必须是 1 到 3600 之间的整数');
             return;
         }
-        if (isNaN(cooldown) || cooldown < 0) {
-            alert('REQUEST_COOLDOWN_MS 必须 ≥ 0');
+        if (cooldownRaw.trim() === '' || !Number.isInteger(cooldown) || cooldown < 0 || cooldown > 60000) {
+            alert('REQUEST_COOLDOWN_MS 必须是 0 到 60000 之间的整数');
             return;
         }
 
@@ -330,7 +333,9 @@ const App = {
                 }),
             });
             if (!res.ok) {
-                alert('保存失败: HTTP ' + res.status);
+                const payload = await res.json().catch(() => null);
+                const message = payload?.error || ('HTTP ' + res.status);
+                alert('保存失败: ' + message);
                 return;
             }
             alert('已保存。点击"重启服务"按钮生效。');

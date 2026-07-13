@@ -8,9 +8,9 @@ import (
 // RuntimeConfig holds runtime-persisted shared server configuration. Values
 // here override env-derived defaults at startup and survive service restarts.
 type RuntimeConfig struct {
-	MaxConcurrency      int `json:"maxConcurrency,omitempty"`
-	QueueTimeoutSeconds int `json:"queueTimeoutSeconds,omitempty"`
-	RequestCooldownMs   int `json:"requestCooldownMs,omitempty"`
+	MaxConcurrency      *int `json:"maxConcurrency,omitempty"`
+	QueueTimeoutSeconds *int `json:"queueTimeoutSeconds,omitempty"`
+	RequestCooldownMs   *int `json:"requestCooldownMs,omitempty"`
 }
 
 // runtimeConfigPath returns the file path used to persist RuntimeConfig. The
@@ -22,26 +22,37 @@ func runtimeConfigPath() string {
 	return "./runtime_config.json"
 }
 
-// LoadRuntimeConfig reads the persisted config from disk. A missing or
-// unparseable file is treated as "no override" and returns the zero value;
-// callers must check for non-zero fields before overriding env defaults.
+// LoadRuntimeConfig reads the persisted config from disk. A missing,
+// unreadable, or invalid file is treated as "no override" and returns the zero
+// value. Pointer fields distinguish omitted values from explicit zero values.
 func LoadRuntimeConfig() RuntimeConfig {
 	var cfg RuntimeConfig
 	data, err := os.ReadFile(runtimeConfigPath())
 	if err != nil {
-		return cfg // missing file or unreadable -> zero value
+		return RuntimeConfig{}
 	}
-	_ = json.Unmarshal(data, &cfg) // corrupt JSON -> zero value
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return RuntimeConfig{}
+	}
 	return cfg
 }
 
-// SaveRuntimeConfig writes the config to disk with 0600 permissions. Returns
-// an error if the write fails; callers should log and continue (do not abort
-// the request just because persistence failed).
+// SaveRuntimeConfig atomically writes the config with 0600 permissions. The
+// temporary file is written in the target directory, so a failed write leaves
+// the previously saved configuration intact.
 func SaveRuntimeConfig(cfg RuntimeConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(runtimeConfigPath(), data, 0600)
+	target := runtimeConfigPath()
+	tmp := target + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, target); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

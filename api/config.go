@@ -22,10 +22,10 @@ type ServerConfigData struct {
 	InternetSearch bool   `json:"internetSearch"`
 	DefaultModel   string `json:"defaultModel"`
 
-	// Rate limiting (read from env at startup; informational here).
-	MaxConcurrency     int `json:"maxConcurrency"`
+	// Rate limiting (resolved from persisted overrides/env at startup; informational here).
+	MaxConcurrency      int `json:"maxConcurrency"`
 	QueueTimeoutSeconds int `json:"queueTimeoutSeconds"`
-	RequestCooldownMs  int `json:"requestCooldownMs"`
+	RequestCooldownMs   int `json:"requestCooldownMs"`
 
 	// AgentID — runtime-settable via /api/config
 	AgentID string `json:"agentId"`
@@ -47,20 +47,20 @@ func HandleStatus(c *gin.Context) {
 	rl := GetRateLimiter()
 	if rl == nil {
 		c.JSON(http.StatusOK, gin.H{
-			"maxConcurrency":     0,
+			"maxConcurrency":      0,
 			"queueTimeoutSeconds": 0,
-			"requestCooldownMs":  0,
-			"inflight":           0,
-			"waiting":            0,
+			"requestCooldownMs":   0,
+			"inflight":            0,
+			"waiting":             0,
 		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"maxConcurrency":     rl.MaxConcurrency(),
+		"maxConcurrency":      rl.MaxConcurrency(),
 		"queueTimeoutSeconds": int(rl.QueueTimeout().Seconds()),
-		"requestCooldownMs":  int(rl.Cooldown().Milliseconds()),
-		"inflight":           rl.Inflight(),
-		"waiting":            rl.Waiting(),
+		"requestCooldownMs":   int(rl.Cooldown().Milliseconds()),
+		"inflight":            rl.Inflight(),
+		"waiting":             rl.Waiting(),
 	})
 }
 
@@ -80,6 +80,36 @@ func HandleSetConfig(c *gin.Context) {
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	var maxConcurrency *int
+	if v, ok := body["maxConcurrency"]; ok {
+		n, valid := toInt(v)
+		if !valid || n < 1 || n > 1000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "maxConcurrency out of range (1..1000)"})
+			return
+		}
+		maxConcurrency = &n
+	}
+
+	var queueTimeoutSeconds *int
+	if v, ok := body["queueTimeoutSeconds"]; ok {
+		n, valid := toInt(v)
+		if !valid || n < 1 || n > 3600 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "queueTimeoutSeconds out of range (1..3600)"})
+			return
+		}
+		queueTimeoutSeconds = &n
+	}
+
+	var requestCooldownMs *int
+	if v, ok := body["requestCooldownMs"]; ok {
+		n, valid := toInt(v)
+		if !valid || n < 0 || n > 60000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "requestCooldownMs out of range (0..60000)"})
+			return
+		}
+		requestCooldownMs = &n
 	}
 
 	serverConfigLock.Lock()
@@ -107,36 +137,33 @@ func HandleSetConfig(c *gin.Context) {
 		}
 	}
 
-	// 新增并发字段
 	changed := false
-	if v, ok := body["maxConcurrency"]; ok {
-		if n, ok := toInt(v); ok && n > 0 {
-			serverConfig.MaxConcurrency = n
-			changed = true
-		}
+	if maxConcurrency != nil {
+		serverConfig.MaxConcurrency = *maxConcurrency
+		changed = true
 	}
-	if v, ok := body["queueTimeoutSeconds"]; ok {
-		if n, ok := toInt(v); ok && n > 0 {
-			serverConfig.QueueTimeoutSeconds = n
-			changed = true
-		}
+	if queueTimeoutSeconds != nil {
+		serverConfig.QueueTimeoutSeconds = *queueTimeoutSeconds
+		changed = true
 	}
-	if v, ok := body["requestCooldownMs"]; ok {
-		if n, ok := toInt(v); ok && n >= 0 {
-			serverConfig.RequestCooldownMs = n
-			changed = true
-		}
+	if requestCooldownMs != nil {
+		serverConfig.RequestCooldownMs = *requestCooldownMs
+		changed = true
 	}
 
-	// 持久化
 	if changed {
+		maxConcurrency := serverConfig.MaxConcurrency
+		queueTimeoutSeconds := serverConfig.QueueTimeoutSeconds
+		requestCooldownMs := serverConfig.RequestCooldownMs
 		cfg := RuntimeConfig{
-			MaxConcurrency:      serverConfig.MaxConcurrency,
-			QueueTimeoutSeconds: serverConfig.QueueTimeoutSeconds,
-			RequestCooldownMs:   serverConfig.RequestCooldownMs,
+			MaxConcurrency:      &maxConcurrency,
+			QueueTimeoutSeconds: &queueTimeoutSeconds,
+			RequestCooldownMs:   &requestCooldownMs,
 		}
 		if err := SaveRuntimeConfig(cfg); err != nil {
 			log.Printf("保存运行时配置失败: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist runtime config: " + err.Error()})
+			return
 		}
 	}
 
@@ -148,7 +175,11 @@ func HandleSetConfig(c *gin.Context) {
 func toInt(v interface{}) (int, bool) {
 	switch n := v.(type) {
 	case float64:
-		return int(n), true
+		converted := int(n)
+		if float64(converted) != n {
+			return 0, false
+		}
+		return converted, true
 	case int:
 		return n, true
 	default:

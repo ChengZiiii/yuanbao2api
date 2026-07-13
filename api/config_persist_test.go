@@ -6,27 +6,44 @@ import (
 	"testing"
 )
 
+func intPointer(n int) *int {
+	return &n
+}
+
 func TestSaveAndLoadRuntimeConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	// 保存
-	cfg := RuntimeConfig{MaxConcurrency: 5, QueueTimeoutSeconds: 90, RequestCooldownMs: 250}
+	cfg := RuntimeConfig{
+		MaxConcurrency:      intPointer(5),
+		QueueTimeoutSeconds: intPointer(90),
+		RequestCooldownMs:   intPointer(250),
+	}
 	if err := SaveRuntimeConfig(cfg); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
 	// 加载
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != 5 {
-		t.Errorf("MaxConcurrency: got %d, want 5", loaded.MaxConcurrency)
+	if loaded.MaxConcurrency == nil || *loaded.MaxConcurrency != 5 {
+		t.Errorf("MaxConcurrency: got %v, want 5", loaded.MaxConcurrency)
 	}
-	if loaded.QueueTimeoutSeconds != 90 {
-		t.Errorf("QueueTimeoutSeconds: got %d, want 90", loaded.QueueTimeoutSeconds)
+	if loaded.QueueTimeoutSeconds == nil || *loaded.QueueTimeoutSeconds != 90 {
+		t.Errorf("QueueTimeoutSeconds: got %v, want 90", loaded.QueueTimeoutSeconds)
 	}
-	if loaded.RequestCooldownMs != 250 {
-		t.Errorf("RequestCooldownMs: got %d, want 250", loaded.RequestCooldownMs)
+	if loaded.RequestCooldownMs == nil || *loaded.RequestCooldownMs != 250 {
+		t.Errorf("RequestCooldownMs: got %v, want 250", loaded.RequestCooldownMs)
+	}
+
+	// A later atomic save must replace the existing file on every supported OS.
+	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: intPointer(6)}); err != nil {
+		t.Fatalf("SaveRuntimeConfig replacement failed: %v", err)
+	}
+	replaced := LoadRuntimeConfig()
+	if replaced.MaxConcurrency == nil || *replaced.MaxConcurrency != 6 {
+		t.Errorf("replacement MaxConcurrency: got %v, want 6", replaced.MaxConcurrency)
 	}
 }
 
@@ -34,7 +51,7 @@ func TestLoadRuntimeConfig_MissingFile(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "nope.json"))
 
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != 0 || loaded.QueueTimeoutSeconds != 0 || loaded.RequestCooldownMs != 0 {
+	if loaded.MaxConcurrency != nil || loaded.QueueTimeoutSeconds != nil || loaded.RequestCooldownMs != nil {
 		t.Errorf("expected zero-valued config when file missing, got %+v", loaded)
 	}
 }
@@ -48,8 +65,48 @@ func TestLoadRuntimeConfig_CorruptFile(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != 0 {
+	if loaded.MaxConcurrency != nil {
 		t.Errorf("expected zero-valued config when file corrupt, got %+v", loaded)
+	}
+}
+
+func TestLoadRuntimeConfig_TypeErrorDiscardsPartialDecode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.json")
+	data := []byte(`{"maxConcurrency":5,"queueTimeoutSeconds":"invalid","requestCooldownMs":250}`)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("failed to write invalid config: %v", err)
+	}
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	loaded := LoadRuntimeConfig()
+	if loaded.MaxConcurrency != nil || loaded.QueueTimeoutSeconds != nil || loaded.RequestCooldownMs != nil {
+		t.Errorf("expected type error to discard all partially decoded values, got %+v", loaded)
+	}
+}
+
+func TestSaveRuntimeConfig_WriteFailurePreservesTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "runtime_config.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	original := []byte(`{"maxConcurrency":1}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatalf("failed to write original config: %v", err)
+	}
+	if err := os.Mkdir(path+".tmp", 0700); err != nil {
+		t.Fatalf("failed to block temporary file path: %v", err)
+	}
+
+	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: intPointer(9)}); err == nil {
+		t.Fatal("SaveRuntimeConfig should report a temporary write failure")
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read original config: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("target changed after failed atomic save: got %q, want %q", got, original)
 	}
 }
 

@@ -143,9 +143,11 @@ go run .
 # 构建镜像
 docker build -t yuanbao2api .
 
-# 运行容器
-docker run -p 3000:3000 --env-file .env yuanbao2api
+# 运行容器（管理面板重启功能依赖自动重启策略）
+docker run --restart unless-stopped -p 3000:3000 --env-file .env yuanbao2api
 ```
+
+> 管理面板的“重启服务”按钮只会让当前进程退出，必须由 supervisor 重新拉起。Windows 可使用项目中的 `restart.bat`；Docker 必须配置 `--restart unless-stopped`（Compose 对应 `restart: unless-stopped`）；其他部署请使用 systemd、Supervisor 等进程管理器。
 
 ### 4. 验证安装
 
@@ -460,7 +462,7 @@ print(response.choices[0].message.content)
 | 构建二进制 | `go build -o main .` | 编译为可执行文件 |
 | 运行测试 | `go test ./...` | 执行所有测试 |
 | Docker 构建 | `docker build -t yuanbao2api .` | 构建 Docker 镜像 |
-| Docker 运行 | `docker run -p 3000:3000 --env-file .env yuanbao2api` | 运行容器 |
+| Docker 运行 | `docker run --restart unless-stopped -p 3000:3000 --env-file .env yuanbao2api` | 运行容器并启用自动重启 |
 
 ### 项目架构
 

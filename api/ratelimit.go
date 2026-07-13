@@ -32,9 +32,10 @@ type RateLimiter struct {
 // Anthropic handlers. It is initialized once at startup via InitRateLimiter.
 var globalRateLimiter *RateLimiter
 
-// InitRateLimiter builds the global rate limiter from environment variables and
-// returns it. It also records the resolved values onto the server config so
-// they are visible via /api/config. Safe to call once at startup.
+// InitRateLimiter builds the global rate limiter from persisted runtime
+// overrides, environment variables, and built-in defaults (in that order). It
+// also records the resolved values on the server config for /api/config.
+// Safe to call once at startup.
 func InitRateLimiter() *RateLimiter {
 	maxC := getEnvInt("MAX_CONCURRENCY", 1)
 	if maxC < 1 {
@@ -49,19 +50,16 @@ func InitRateLimiter() *RateLimiter {
 		cooldown = 0
 	}
 
-	// 持久化覆盖 env 默认值（runtime_config.json > env > 内置默认值）
+	// Persisted values override env defaults (runtime_config.json > env > built-in).
 	rc := LoadRuntimeConfig()
-	if rc.MaxConcurrency > 0 {
-		maxC = rc.MaxConcurrency
-		if maxC < 1 {
-			maxC = 1
-		}
+	if rc.MaxConcurrency != nil && *rc.MaxConcurrency > 0 {
+		maxC = *rc.MaxConcurrency
 	}
-	if rc.QueueTimeoutSeconds > 0 {
-		qTimeout = time.Duration(rc.QueueTimeoutSeconds) * time.Second
+	if rc.QueueTimeoutSeconds != nil && *rc.QueueTimeoutSeconds > 0 {
+		qTimeout = time.Duration(*rc.QueueTimeoutSeconds) * time.Second
 	}
-	if rc.RequestCooldownMs > 0 {
-		cooldown = time.Duration(rc.RequestCooldownMs) * time.Millisecond
+	if rc.RequestCooldownMs != nil && *rc.RequestCooldownMs >= 0 {
+		cooldown = time.Duration(*rc.RequestCooldownMs) * time.Millisecond
 	}
 
 	globalRateLimiter = &RateLimiter{

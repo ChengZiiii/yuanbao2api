@@ -17,13 +17,13 @@ func resetServerConfig() {
 	serverConfigLock.Lock()
 	defer serverConfigLock.Unlock()
 	serverConfig = &ServerConfigData{
-		DeepThinking:      false,
-		InternetSearch:    false,
-		DefaultModel:      "deep_seek_v3",
-		MaxConcurrency:    0,
+		DeepThinking:        false,
+		InternetSearch:      false,
+		DefaultModel:        "deep_seek_v3",
+		MaxConcurrency:      0,
 		QueueTimeoutSeconds: 0,
-		RequestCooldownMs: 0,
-		AgentID:           "",
+		RequestCooldownMs:   0,
+		AgentID:             "",
 	}
 }
 
@@ -226,8 +226,72 @@ func TestHandleSetConfig_PersistsRuntimeConfig(t *testing.T) {
 
 	// 文件应被写入
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != 3 || loaded.QueueTimeoutSeconds != 80 || loaded.RequestCooldownMs != 400 {
+	if loaded.MaxConcurrency == nil || *loaded.MaxConcurrency != 3 ||
+		loaded.QueueTimeoutSeconds == nil || *loaded.QueueTimeoutSeconds != 80 ||
+		loaded.RequestCooldownMs == nil || *loaded.RequestCooldownMs != 400 {
 		t.Errorf("runtime_config.json not persisted correctly: %+v", loaded)
+	}
+}
+
+func TestHandleSetConfig_PersistenceFailureReturns500(t *testing.T) {
+	resetServerConfig()
+	t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "missing", "runtime_config.json"))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", &readCloser{data: `{"maxConcurrency":3}`})
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	HandleSetConfig(c)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when persistence fails, got %d. body=%s", w.Code, w.Body.String())
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+	if response["error"] == nil || response["error"] == "" {
+		t.Errorf("expected persistence error details, got %s", w.Body.String())
+	}
+}
+
+func TestHandleSetConfig_RejectsInvalidNumericValues(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "fractional max concurrency", body: `{"maxConcurrency":1.9}`},
+		{name: "max concurrency below range", body: `{"maxConcurrency":0}`},
+		{name: "max concurrency above range", body: `{"maxConcurrency":1001}`},
+		{name: "max concurrency string", body: `{"maxConcurrency":"2"}`},
+		{name: "fractional queue timeout", body: `{"queueTimeoutSeconds":1.5}`},
+		{name: "queue timeout below range", body: `{"queueTimeoutSeconds":0}`},
+		{name: "queue timeout above range", body: `{"queueTimeoutSeconds":3601}`},
+		{name: "queue timeout boolean", body: `{"queueTimeoutSeconds":true}`},
+		{name: "fractional cooldown", body: `{"requestCooldownMs":0.5}`},
+		{name: "cooldown below range", body: `{"requestCooldownMs":-1}`},
+		{name: "cooldown above range", body: `{"requestCooldownMs":60001}`},
+		{name: "cooldown string", body: `{"requestCooldownMs":"0"}`},
+		{name: "oversized number", body: `{"maxConcurrency":1e100}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetServerConfig()
+			t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "runtime_config.json"))
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("POST", "/api/config", &readCloser{data: tt.body})
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			HandleSetConfig(c)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected 400, got %d. body=%s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 

@@ -36,7 +36,7 @@ func TestInitRateLimiter_RuntimeConfigOverridesEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path) // must precede Save
-	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: 8}); err != nil {
+	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: intPointer(8)}); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
@@ -54,13 +54,28 @@ func TestInitRateLimiter_ZeroRuntimeValuesIgnored(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path) // must precede Save
-	if err := SaveRuntimeConfig(RuntimeConfig{QueueTimeoutSeconds: 0}); err != nil {
+	if err := SaveRuntimeConfig(RuntimeConfig{QueueTimeoutSeconds: intPointer(0)}); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
 	rl := InitRateLimiter()
 	if rl.QueueTimeout().Seconds() != 45 {
 		t.Errorf("QueueTimeout: got %v, want 45s (zero runtime value should not override)", rl.QueueTimeout())
+	}
+}
+
+func TestInitRateLimiter_RuntimeCooldownZeroOverridesEnv(t *testing.T) {
+	t.Setenv("REQUEST_COOLDOWN_MS", "750")
+
+	path := filepath.Join(t.TempDir(), "runtime_config.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+	if err := os.WriteFile(path, []byte(`{"requestCooldownMs":0}`), 0600); err != nil {
+		t.Fatalf("failed to write runtime config: %v", err)
+	}
+
+	rl := InitRateLimiter()
+	if rl.Cooldown().Milliseconds() != 0 {
+		t.Errorf("Cooldown: got %v, want 0ms (persisted zero should override env)", rl.Cooldown())
 	}
 }
 

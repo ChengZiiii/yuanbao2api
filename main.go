@@ -10,21 +10,7 @@ import (
 	"yuanbao2api/api"
 )
 
-func main() {
-	// Load environment variables from .env file
-	err := godotenv.Load()
-	if err != nil {
-		log.Printf("Warning: Error loading .env file: %v", err)
-	}
-
-	// Set Gin mode based on environment
-	ginMode := os.Getenv("GIN_MODE")
-	if ginMode == "" {
-		ginMode = gin.DebugMode
-	}
-	gin.SetMode(ginMode)
-
-	// Create Gin router
+func setupRouter() *gin.Engine {
 	r := gin.Default()
 
 	// CORS middleware for management panel
@@ -52,7 +38,6 @@ func main() {
 
 	// API routes with optional API key authentication
 	apiKey := os.Getenv("API_KEY")
-
 	v1 := r.Group("/v1")
 	if apiKey != "" {
 		v1.Use(func(c *gin.Context) {
@@ -69,7 +54,9 @@ func main() {
 		v1.POST("/messages", api.HandleAnthropicMessages)
 	}
 
-	// Management panel config API
+	// Management routes intentionally share the panel's unauthenticated /api
+	// group. In deployments exposed beyond a trusted home/private network,
+	// protect this group externally because POST /api/restart exits the process.
 	config := r.Group("/api")
 	{
 		config.GET("/config", api.HandleGetConfig)
@@ -79,6 +66,27 @@ func main() {
 		config.GET("/logs", api.HandleLogs)
 		config.POST("/restart", api.HandleRestart)
 	}
+
+	return r
+}
+
+func main() {
+	// Load environment variables from .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Printf("Warning: Error loading .env file: %v", err)
+	}
+
+	// Set Gin mode based on environment
+	ginMode := os.Getenv("GIN_MODE")
+	if ginMode == "" {
+		ginMode = gin.DebugMode
+	}
+	gin.SetMode(ginMode)
+
+	// Create Gin router
+	r := setupRouter()
+	apiKey := os.Getenv("API_KEY")
 
 	// Start server
 	port := os.Getenv("PORT")

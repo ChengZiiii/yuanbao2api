@@ -128,15 +128,15 @@
                 <div class="section-title">并发参数（需重启生效）</div>
                 <div class="config-row">
                     <span class="config-label">MAX_CONCURRENCY:</span>
-                    <input type="number" id="maxConcurrencyInput" min="1" class="config-input" style="width:100px;">
+                    <input type="number" id="maxConcurrencyInput" min="1" max="1000" step="1" class="config-input" style="width:100px;">
                 </div>
                 <div class="config-row">
                     <span class="config-label">QUEUE_TIMEOUT_SECONDS:</span>
-                    <input type="number" id="queueTimeoutInput" min="1" class="config-input" style="width:100px;">
+                    <input type="number" id="queueTimeoutInput" min="1" max="3600" step="1" class="config-input" style="width:100px;">
                 </div>
                 <div class="config-row">
                     <span class="config-label">REQUEST_COOLDOWN_MS:</span>
-                    <input type="number" id="cooldownInput" min="0" class="config-input" style="width:100px;">
+                    <input type="number" id="cooldownInput" min="0" max="60000" step="1" class="config-input" style="width:100px;">
                 </div>
                 <div style="color:#ffa500;font-size:12px;margin:8px 0;">⚠ 修改后需重启服务才能生效</div>
                 <button class="btn" onclick="App.saveConcurrency()">保存并发参数</button>
