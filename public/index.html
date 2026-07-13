@@ -71,7 +71,28 @@
         </div>
 
         <div class="panel" id="panel-testing">
-            <div class="section"><div class="section-title">API 测试</div><p style="color:#555;font-size:13px;">测试区面板将在后续任务中实现。</p></div>
+            <div class="section">
+                <div class="section-title">API 测试</div>
+                <div class="test-input-row">
+                    <input type="text" id="testMessage" placeholder="输入消息..." value="你好" class="test-input">
+                    <button class="btn" onclick="App.testAPI()">发送测试</button>
+                </div>
+                <div class="test-options">
+                    <label class="toggle-pill"><input type="checkbox" id="streamToggle"> stream</label>
+                    <label class="toggle-pill"><input type="checkbox" id="multiTurnToggle"> 多轮对话</label>
+                    <label class="toggle-pill"><input type="checkbox" id="compareToggle"> 双模型对比</label>
+                </div>
+                <div class="result-panels" id="resultArea">
+                    <div class="result-box">
+                        <div class="result-header">← DeepSeek <span class="result-status" id="dsStatus"></span></div>
+                        <pre class="result-content" id="dsResult">等待发送...</pre>
+                    </div>
+                    <div class="result-box" id="hyBox" style="display:none;">
+                        <div class="result-header">← Hunyuan <span class="result-status" id="hyStatus"></span></div>
+                        <pre class="result-content" id="hyResult">等待发送...</pre>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="panel" id="panel-config">
             <div class="section"><div class="section-title">配置</div><p style="color:#555;font-size:13px;">配置面板将在后续任务中实现。</p></div>

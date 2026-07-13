@@ -1,5 +1,6 @@
 const App = {
     config: { deepThinking: false, internetSearch: false, defaultModel: 'deep_seek_v3' },
+    _messages: [],
     currentTab: 'dashboard',
 
     init() {
@@ -76,23 +77,80 @@ const App = {
 
     async testAPI() {
         const message = document.getElementById('testMessage');
-        if (!message) return;
-        const requestBody = {
-            model: this.config.defaultModel,
-            messages: [{ role: 'user', content: message.value }],
-            stream: false
-        };
-        document.getElementById('requestResult').textContent = JSON.stringify(requestBody, null, 2);
-        document.getElementById('responseResult').textContent = '请求中...';
+        if (!message || !message.value.trim()) return;
+
+        const stream = document.getElementById('streamToggle')?.checked || false;
+        const compare = document.getElementById('compareToggle')?.checked || false;
+        const multiTurn = document.getElementById('multiTurnToggle')?.checked || false;
+
+        const dsEl = document.getElementById('dsResult');
+        const hyEl = document.getElementById('hyResult');
+        const dsStatus = document.getElementById('dsStatus');
+        const hyStatus = document.getElementById('hyStatus');
+        const hyBox = document.getElementById('hyBox');
+
+        // Multi-turn: manage message history
+        let messages;
+        if (multiTurn) {
+            messages = [...this._messages, { role: 'user', content: message.value }];
+        } else {
+            messages = [{ role: 'user', content: message.value }];
+            this._messages = [];
+        }
+
+        const makeBody = (model) => JSON.stringify({
+            model: model,
+            messages: messages,
+        });
+
+        // Show DeepSeek result box, optionally show Hunyuan
+        dsEl.textContent = '请求中...';
+        dsStatus.textContent = '';
+        if (hyBox) {
+            hyBox.style.display = compare ? 'block' : 'none';
+        }
+        if (hyEl) hyEl.textContent = compare ? '请求中...' : '';
+        if (hyStatus) hyStatus.textContent = '';
+
         try {
-            const response = await fetch('/v1/chat/completions', {
+            // DeepSeek request
+            const dsRes = await fetch('/v1/chat/completions', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody)
+                body: makeBody('deep_seek_v3')
             });
-            const data = await response.json();
-            document.getElementById('responseResult').textContent = JSON.stringify(data, null, 2);
-        } catch (error) {
-            document.getElementById('responseResult').textContent = '错误: ' + error.message;
+            const dsData = await dsRes.json();
+            const dsContent = dsData.choices?.[0]?.message?.content || JSON.stringify(dsData);
+            dsEl.textContent = dsContent;
+            if (dsStatus) {
+                dsStatus.textContent = dsRes.status;
+                dsStatus.style.color = dsRes.status === 200 ? '#0f0' : '#f44';
+            }
+
+            if (compare) {
+                // Hunyuan request (only if compare mode)
+                const hyRes = await fetch('/v1/chat/completions', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: makeBody('hunyuan')
+                });
+                const hyData = await hyRes.json();
+                const hyContent = hyData.choices?.[0]?.message?.content || JSON.stringify(hyData);
+                hyEl.textContent = hyContent;
+                if (hyStatus) {
+                    hyStatus.textContent = hyRes.status;
+                    hyStatus.style.color = hyRes.status === 200 ? '#0f0' : '#f44';
+                }
+            }
+
+            // Multi-turn: save the conversation
+            if (multiTurn) {
+                this._messages.push({ role: 'user', content: message.value });
+                const content = dsData.choices?.[0]?.message?.content || '';
+                if (content) {
+                    this._messages.push({ role: 'assistant', content: content });
+                }
+            }
+        } catch(e) {
+            dsEl.textContent = '请求失败: ' + e.message;
         }
     },
 
