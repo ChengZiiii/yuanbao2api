@@ -79,6 +79,24 @@ func HandleOpenAIChatCompletion(c *gin.Context) {
 
 	yuanbaoReq := buildYuanbaoRequest(prompt, modelConfig, useDeepThinking, useInternetSearch, agentID)
 
+	// Strict concurrency gate: acquire a slot before hitting upstream Yuanbao.
+	// The slot is held for the entire critical section (upstream call + stream/
+	// non-stream response writing) and released via defer. Excess requests block
+	// in FIFO order until a slot frees, up to the queue timeout.
+	if rl := GetRateLimiter(); rl != nil {
+		if err := rl.Acquire(c.Request.Context()); err != nil {
+			log.Printf("Rate limit: rejecting OpenAI request (queue full/timeout): %v", err)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": gin.H{
+					"message": "并发已达上限，请求在队列中等待超时，请稍后重试。(" + err.Error() + ")",
+					"type":    "rate_limit_error",
+				},
+			})
+			return
+		}
+		defer rl.Release()
+	}
+
 	client := yuanbao.NewClient()
 	resp, err := client.SendRequestWithID(yuanbaoReq, agentID, conversationID)
 	if err != nil {

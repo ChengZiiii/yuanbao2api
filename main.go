@@ -62,6 +62,7 @@ func main() {
 	{
 		config.GET("/config", api.HandleGetConfig)
 		config.POST("/config", api.HandleSetConfig)
+		config.GET("/status", api.HandleStatus)
 	}
 
 	// Start server
@@ -69,6 +70,15 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
+
+	// Initialize the strict concurrency limiter from env and report it.
+	rl := api.InitRateLimiter()
+	log.Printf("并发控制已启用: 最大并发=%d, 队列超时=%d秒, 释放冷却=%d毫秒",
+		rl.MaxConcurrency(), int(rl.QueueTimeout().Seconds()), int(rl.Cooldown().Milliseconds()))
+	if rl.MaxConcurrency() == 1 {
+		log.Printf("提示: 当前为单并发模式，超出请求将自动排队而非返回 429。如需降低风控，可设置 REQUEST_COOLDOWN_MS=500~1000")
+	}
+
 	log.Printf("Yuanbao2API server starting on port %s", port)
 	log.Printf("\n📊 管理面板: http://localhost:%s", port)
 	log.Printf("\n配置说明：")

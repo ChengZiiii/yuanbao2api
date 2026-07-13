@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +20,44 @@ type ServerConfigData struct {
 	DeepThinking   bool   `json:"deepThinking"`
 	InternetSearch bool   `json:"internetSearch"`
 	DefaultModel   string `json:"defaultModel"`
+
+	// Rate limiting (read from env at startup; informational here).
+	MaxConcurrency     int `json:"maxConcurrency"`
+	QueueTimeoutSeconds int `json:"queueTimeoutSeconds"`
+	RequestCooldownMs  int `json:"requestCooldownMs"`
+}
+
+// getEnvInt reads an integer environment variable, falling back to def on
+// missing/invalid values.
+func getEnvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// HandleStatus returns live concurrency/queue stats for observability.
+func HandleStatus(c *gin.Context) {
+	rl := GetRateLimiter()
+	if rl == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"maxConcurrency":     0,
+			"queueTimeoutSeconds": 0,
+			"requestCooldownMs":  0,
+			"inflight":           0,
+			"waiting":            0,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"maxConcurrency":     rl.MaxConcurrency(),
+		"queueTimeoutSeconds": int(rl.QueueTimeout().Seconds()),
+		"requestCooldownMs":  int(rl.Cooldown().Milliseconds()),
+		"inflight":           rl.Inflight(),
+		"waiting":            rl.Waiting(),
+	})
 }
 
 // HandleGetConfig returns the current server configuration

@@ -81,6 +81,25 @@ func HandleAnthropicMessages(c *gin.Context) {
 
 	yuanbaoReq := buildYuanbaoRequest(prompt, modelConfig, useDeepThinking, useInternetSearch, agentID)
 
+	// Strict concurrency gate: acquire a slot before hitting upstream Yuanbao.
+	// Held for the entire critical section (upstream call + stream/non-stream
+	// response writing) and released via defer. Excess requests queue in FIFO
+	// order until a slot frees, up to the queue timeout.
+	if rl := GetRateLimiter(); rl != nil {
+		if err := rl.Acquire(c.Request.Context()); err != nil {
+			log.Printf("Rate limit: rejecting Anthropic request (queue full/timeout): %v", err)
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"type": "error",
+				"error": map[string]string{
+					"type":    "rate_limit_error",
+					"message": "并发已达上限，请求在队列中等待超时，请稍后重试。(" + err.Error() + ")",
+				},
+			})
+			return
+		}
+		defer rl.Release()
+	}
+
 	log.Printf("=== Anthropic API -> 鍏冨疂璇锋眰 ===")
 	log.Printf("Model: %s -> chatModelId: %s", model, modelConfig.ChatModelID)
 	log.Printf("Tools: %d", len(req.Tools))
