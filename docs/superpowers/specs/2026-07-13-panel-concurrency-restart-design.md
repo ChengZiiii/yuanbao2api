@@ -2,6 +2,7 @@
 
 **日期**: 2026-07-13
 **状态**: 已批准设计，待实现
+**范围**: 多 provider 远景下的「共享管理面板层」子集
 
 ## 目标
 
@@ -264,34 +265,37 @@ goto loop
 - 重启端点不验证 Cookie 有效性等——它只负责退出进程
 - 重启时如果存在挂起的请求，**它们会中断**（`os.Exit`），这是设计上接受的（配置变更本来就应避开业务高峰）
 
-## 未来兼容：多 Provider 架构
+## 未来兼容（Multi-Provider 远景）
 
-本项目长期计划演化为"统一本地网页代理多家 web2api"（元宝 / ChatGPT / Gemini 等）。当前 spec 是这条主线的子集（共享基础设施层）。
+**项目长期目标**：从单一元宝 wrapper 演化为多 provider web2api 聚合器。统一管理面板可配置每家反代；模型路由按 provider 划分。本 spec 是这条路径上的子集。
 
-### 本次改动在多 Provider 架构中的位置
+### 本 spec 中可直接复用的部件
 
-| 改动 | 多 Provider 下的位置 |
-|------|---------------------|
-| `runtime_config.json` 持久化 | 升级为"全局共享配置"（API_KEY / PORT / 共享并发参数等） |
-| `LoadRuntimeConfig` / `SaveRuntimeConfig` | 复用，新增 `LoadProviderConfig(id)` / `SaveProviderConfig(id, cfg)` |
-| `InitRateLimiter` 启动时合并 | 复用，可能拆成"全局 limiter + 每 provider limiter" |
-| `POST /api/restart` 重启机制 | 完全复用 |
-| `restart.bat` | 完全复用 |
+| 部件 | 未来多 provider 时的去向 |
+|------|------------------------|
+| `RuntimeConfig` struct + Load/Save 函数 | 升级为全局共享配置 schema（新增 API_KEY、PORT、GIN_MODE 等） |
+| `runtime_config.json` 文件路径约定 | 路径不变；新增 `providers/<id>.json` 用于各家专属配置 |
+| `InitRateLimiter` env + file override 模式 | 推广到其他初始化逻辑（InitSessionManager、InitRouteTable 等） |
+| `POST /api/restart` 端点 + `restart.bat` | 完全复用，零改动 |
+| `handleSetConfig` 用 `map[string]interface{}` 按 key 检测 | 沿用：未来 Provider 专属端点（如 `/api/providers/yuanbao/config`）也用同一模式 |
 
-### 本次刻意**不**做的事
+### 本 spec 中需要警惕、不应过度耦合的部件
 
-为避免越界，本次 spec 不做以下事：
-- 不重构管理面板为 `Providers/<id>/` 嵌套结构
-- 不把 `YUANBAO_COOKIE` / `YUANBAO_AGENT_ID` 等 provider 专属配置迁出"运行时配置"section
-- 不实现 provider 注册/路由分发
+| 部件 | 提醒 |
+|------|------|
+| `ServerConfigData` 的 `AgentID` 等元宝专属字段 | 未来需迁出到 `ProviderYuanbaoConfig`，但本次**不动** |
+| `HandleSetConfig` 当前聚合所有共享+元宝字段 | 未来需按 provider 拆分（`/api/config` 共享层 + `/api/providers/:id/config` 各自一层）；本次**保持聚合**，但用 map-based 检测避免阻塞拆分 |
+| `public/index.html` 把 AgentID 直接放进"运行时配置"section | 未来属于 `Providers/元宝/`，但 UI 重组是另一次 PR |
 
-这些是未来 multi-provider spec 的范围。
+### 当前 spec 明确**不做**的事
 
-### 未来工作的入口点（占位）
+- 不引入 Provider 接口/注册表
+- 不修改 `/v1/chat/completions` 路由分发逻辑
+- 不改造现有 `yuanbao/` 包结构
+- 不预先抽象"反代适配器"框架
 
-未来 multi-provider 改造启动时，应直接复用本 spec 落地的：
-- `api/config_persist.go` 的 `RuntimeConfig` / Load / Save 模式
-- `api/restart.go` 的重启模式
-- `HandleSetConfig` 按 key 存在性更新模式（已为部分更新打好基础）
+这些都留到 future multi-provider 设计的 spec。
 
-后续 spec 命名建议：`docs/superpowers/specs/YYYY-MM-DD-multi-provider-architecture-design.md`。
+### 标记
+
+PR/Commit 标题前缀建议 `feat(admin-shared):` 以表明属于「共享管理面板层」而非「Provider 层」，便于未来按层 cherry-pick。
