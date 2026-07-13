@@ -64,10 +64,8 @@ func TestInitRateLimiter_ZeroRuntimeValuesIgnored(t *testing.T) {
 	}
 }
 
-func TestInitRateLimiter_CooldownZeroIsValid(t *testing.T) {
-	// cooldown 的 0 是合法值，但目前 InitRateLimiter 不会从 runtime 写入 0，
-	// 因为 LoadRuntimeConfig 返回零值时 InitRateLimiter 不区分 "未设置" 和 "0"。
-	// 本测试只是确认：env 给 0 时行为不变（已隐含在 TestInitRateLimiter_EnvOnly）。
+func TestInitRateLimiter_DefaultCooldownIsZero(t *testing.T) {
+	// Sanity: with no env and no runtime_config.json, cooldown defaults to 0ms.
 	os.Unsetenv("REQUEST_COOLDOWN_MS")
 	t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "absent.json"))
 	rl := InitRateLimiter()
