@@ -81,6 +81,9 @@ func main() {
 		log.Printf("提示: 当前为单并发模式，超出请求将自动排队而非返回 429。如需降低风控，可设置 REQUEST_COOLDOWN_MS=500~1000")
 	}
 
+	// Sync AgentID from env into runtime config
+	api.SyncAgentID()
+
 	log.Printf("Yuanbao2API server starting on port %s", port)
 	log.Printf("\n📊 管理面板: http://localhost:%s", port)
 	log.Printf("\n配置说明：")

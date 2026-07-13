@@ -25,6 +25,9 @@ type ServerConfigData struct {
 	MaxConcurrency     int `json:"maxConcurrency"`
 	QueueTimeoutSeconds int `json:"queueTimeoutSeconds"`
 	RequestCooldownMs  int `json:"requestCooldownMs"`
+
+	// AgentID — runtime-settable via /api/config
+	AgentID string `json:"agentId"`
 }
 
 // getEnvInt reads an integer environment variable, falling back to def on
@@ -87,8 +90,22 @@ func HandleSetConfig(c *gin.Context) {
 	if req.DefaultModel != "" {
 		serverConfig.DefaultModel = req.DefaultModel
 	}
+	if req.AgentID != "" {
+		serverConfig.AgentID = req.AgentID
+	}
 
 	c.JSON(http.StatusOK, serverConfig)
+}
+
+// SyncAgentID copies the env YUANBAO_AGENT_ID into serverConfig if not set.
+func SyncAgentID() {
+	serverConfigLock.Lock()
+	defer serverConfigLock.Unlock()
+	if serverConfig.AgentID == "" {
+		if v := os.Getenv("YUANBAO_AGENT_ID"); v != "" {
+			serverConfig.AgentID = v
+		}
+	}
 }
 
 // GetServerConfig returns a copy of the current server config

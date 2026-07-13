@@ -21,8 +21,12 @@ import (
 	"yuanbao2api/yuanbao"
 )
 
-// getAgentID returns the Yuanbao agent ID from environment or default
+// getAgentID returns the Yuanbao agent ID from runtime config, env, or default.
 func getAgentID() string {
+	cfg := GetServerConfig()
+	if cfg.AgentID != "" {
+		return cfg.AgentID
+	}
 	agentID := os.Getenv("YUANBAO_AGENT_ID")
 	if agentID == "" {
 		agentID = "naQivTmsDa"
