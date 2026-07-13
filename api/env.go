@@ -15,6 +15,13 @@ func maskCookie(cookie string) string {
 	return cookie[:8] + "****"
 }
 
+func maskKey(key string) string {
+	if len(key) <= 4 {
+		return "****"
+	}
+	return key[:4] + "****"
+}
+
 // HandleEnv returns non-sensitive environment variables and masked cookie.
 func HandleEnv(c *gin.Context) {
 	rl := GetRateLimiter()
@@ -28,6 +35,7 @@ func HandleEnv(c *gin.Context) {
 	}
 
 	cookie := os.Getenv("YUANBAO_COOKIE")
+	apiKey := os.Getenv("API_KEY")
 
 	c.JSON(http.StatusOK, gin.H{
 		"port":                os.Getenv("PORT"),
@@ -37,5 +45,6 @@ func HandleEnv(c *gin.Context) {
 		"requestCooldownMs":   cooldown,
 		"yuanbaoAgentId":      getAgentID(),
 		"yuanbaoCookie":       maskCookie(cookie),
+		"apiKey":              maskKey(apiKey),
 	})
 }

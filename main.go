@@ -50,8 +50,19 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// API routes
+	// API routes with optional API key authentication
+	apiKey := os.Getenv("API_KEY")
+
 	v1 := r.Group("/v1")
+	if apiKey != "" {
+		v1.Use(func(c *gin.Context) {
+			if c.GetHeader("Authorization") != "Bearer "+apiKey {
+				c.AbortWithStatusJSON(401, gin.H{"error": gin.H{"message": "Invalid API key", "type": "authentication_error", "code": "invalid_api_key"}})
+				return
+			}
+			c.Next()
+		})
+	}
 	{
 		v1.GET("/models", api.HandleOpenAIModels)
 		v1.POST("/chat/completions", api.HandleOpenAIChatCompletion)
@@ -85,11 +96,15 @@ func main() {
 	// Sync AgentID from env into runtime config
 	api.SyncAgentID()
 
+	if apiKey != "" {
+		log.Printf("API 密钥认证已启用 — 在 Authorization 头中使用 Bearer %s", apiKey)
+	}
 	log.Printf("Yuanbao2API server starting on port %s", port)
 	log.Printf("\n📊 管理面板: http://localhost:%s", port)
 	log.Printf("\n配置说明：")
 	log.Printf("1. 设置环境变量 YUANBAO_COOKIE（从浏览器复制）")
 	log.Printf("2. 可选：设置环境变量 YUANBAO_AGENT_ID（默认: naQivTmsDa）")
+	log.Printf("3. 可选：API_KEY — 第三方软件需要 API Key 时，填入此值")
 	log.Printf("\n✨ 使用临时对话模式，每次请求自动创建新会话")
 	log.Printf("\n功能特性：")
 	log.Printf("- 深度思考模式（deep_thinking: true）")

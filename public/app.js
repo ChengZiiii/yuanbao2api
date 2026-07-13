@@ -200,6 +200,7 @@ const App = {
             const data = await res.json();
             document.getElementById('envCookie').textContent = data.yuanbaoCookie || '-';
             document.getElementById('envAgentId').textContent = data.yuanbaoAgentId || '-';
+            document.getElementById('envApiKey').textContent = data.apiKey || '-';
             document.getElementById('envPort').textContent = data.port || '-';
             document.getElementById('envGinMode').textContent = data.ginMode || '-';
             document.getElementById('envMaxC').textContent = data.maxConcurrency ?? '-';
