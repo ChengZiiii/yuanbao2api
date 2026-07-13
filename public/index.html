@@ -95,10 +95,68 @@
             </div>
         </div>
         <div class="panel" id="panel-config">
-            <div class="section"><div class="section-title">配置</div><p style="color:#555;font-size:13px;">配置面板将在后续任务中实现。</p></div>
+            <div class="section">
+                <div class="section-title">环境变量一览</div>
+                <table class="env-table" id="envTable">
+                    <tr><td>YUANBAO_COOKIE</td><td><span id="envCookie">加载中...</span> <span style="color:#555;font-size:11px;">（仅显示前 8 位）</span></td></tr>
+                    <tr><td>YUANBAO_AGENT_ID</td><td id="envAgentId">-</td></tr>
+                    <tr><td>PORT</td><td id="envPort">-</td></tr>
+                    <tr><td>GIN_MODE</td><td id="envGinMode">-</td></tr>
+                    <tr><td>MAX_CONCURRENCY</td><td id="envMaxC">-</td></tr>
+                    <tr><td>QUEUE_TIMEOUT_SECONDS</td><td id="envQTimeout">-</td></tr>
+                    <tr><td>REQUEST_COOLDOWN_MS</td><td id="envCooldown">-</td></tr>
+                </table>
+            </div>
+            <div class="section">
+                <div class="section-title">运行时配置</div>
+                <div class="config-row">
+                    <span class="config-label">Agent ID:</span>
+                    <input type="text" id="agentIdInput" class="config-input" placeholder="naQivTmsDa">
+                    <button class="btn-sm" onclick="App.saveAgentId()">保存</button>
+                </div>
+                <div class="config-row">
+                    <button class="btn-sm" onclick="App.checkCookie()">🔍 检测 Cookie</button>
+                    <span id="cookieResult" style="font-size:13px;margin-left:12px;"></span>
+                </div>
+            </div>
+            <div class="section">
+                <div class="section-title">功能配置</div>
+                <div class="toggle-group">
+                    <div class="toggle-item">
+                        <div class="toggle" id="deepThinkingToggle" onclick="App.toggleFeature('deepThinking')">
+                            <span class="toggle-label">深度思考</span>
+                            <div class="toggle-switch"></div>
+                        </div>
+                    </div>
+                    <div class="toggle-item">
+                        <div class="toggle" id="internetSearchToggle" onclick="App.toggleFeature('internetSearch')">
+                            <span class="toggle-label">联网搜索</span>
+                            <div class="toggle-switch"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top:16px;">
+                    <label>默认模型</label>
+                    <select id="modelSelect">
+                        <option value="deep_seek_v3">DeepSeek - 深度思考</option>
+                        <option value="hunyuan">Hunyuan - 全能处理</option>
+                    </select>
+                </div>
+            </div>
         </div>
         <div class="panel" id="panel-info">
-            <div class="section"><div class="section-title">API 信息</div><p style="color:#555;font-size:13px;">API 信息面板将在后续任务中实现。</p></div>
+            <div class="section">
+                <div class="section-title">API 端点</div>
+                <p style="font-size:13px;color:#555;margin-bottom:16px;">点击 📋 复制到剪贴板</p>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/v1/chat/completions"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/v1/chat/completions')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/v1/messages"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/v1/messages')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/v1/models"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/v1/models')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/api/config"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/api/config')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/api/status"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/api/status')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/api/env"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/api/env')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/api/logs"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/api/logs')">📋</button></div>
+                <div class="endpoint-row"><input type="text" readonly value="http://localhost:3000/health"><button class="btn-sm" onclick="App.copyEndpoint(this, 'http://localhost:3000/health')">📋</button></div>
+            </div>
         </div>
     </div>
 

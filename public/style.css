@@ -303,3 +303,16 @@
         .result-header { padding:8px 12px; background:#111; border-bottom:1px solid #333; font-size:12px; color:#888; }
         .result-content { padding:12px; font-size:12px; font-family:monospace; white-space:pre-wrap; word-break:break-all; min-height:100px; max-height:400px; overflow-y:auto; color:#ccc; margin:0; }
         .result-status { float:right; }
+
+        .env-table { width:100%; border-collapse:collapse; font-size:13px; }
+        .env-table td { padding:10px 12px; border-bottom:1px solid #222; }
+        .env-table td:first-child { color:#888; width:200px; }
+        .env-table td:last-child { font-family:monospace; font-size:12px; }
+        .config-row { display:flex; gap:12px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+        .config-label { font-size:13px; color:#888; white-space:nowrap; }
+        .config-input { flex:1; max-width:300px; padding:8px 12px; background:#000; border:1px solid #333; border-radius:4px; color:#fff; font-size:13px; font-family:monospace; outline:none; }
+        .config-input:focus { border-color:#666; }
+        .endpoint-row { display:flex; gap:8px; margin-bottom:12px; align-items:center; }
+        .endpoint-row input { flex:1; padding:10px 12px; background:#000; border:1px solid #333; border-radius:4px; color:#888; font-size:12px; font-family:monospace; }
+        .btn-sm { padding:6px 12px; background:#222; color:#fff; border:1px solid #333; border-radius:4px; font-size:12px; cursor:pointer; }
+        .btn-sm:hover { background:#333; }

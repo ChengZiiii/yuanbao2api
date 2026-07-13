@@ -21,6 +21,7 @@ const App = {
         document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.panel === name));
         document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
         if (name === 'dashboard') { this.loadStatus(); this.loadLogs(); }
+        if (name === 'config') { this.loadEnv(); }
     },
 
     async loadConfig() {
@@ -48,6 +49,8 @@ const App = {
         if (is) is.classList.toggle('active', this.config.internetSearch);
         const ms = document.getElementById('modelSelect');
         if (ms) ms.value = this.config.defaultModel;
+        const ai = document.getElementById('agentIdInput');
+        if (ai) ai.value = this.config.agentId || '';
     },
 
     async checkStatus() {
@@ -167,6 +170,79 @@ const App = {
             document.getElementById('usageBar').style.width = Math.min(pct, 100) + '%';
             document.getElementById('usagePct').textContent = Math.min(pct, 100) + '%';
         } catch(e) {}
+    },
+
+    async loadEnv() {
+        try {
+            const res = await fetch('/api/env');
+            const data = await res.json();
+            document.getElementById('envCookie').textContent = data.yuanbaoCookie || '-';
+            document.getElementById('envAgentId').textContent = data.yuanbaoAgentId || '-';
+            document.getElementById('envPort').textContent = data.port || '-';
+            document.getElementById('envGinMode').textContent = data.ginMode || '-';
+            document.getElementById('envMaxC').textContent = data.maxConcurrency ?? '-';
+            document.getElementById('envQTimeout').textContent = data.queueTimeoutSeconds ?? '-';
+            document.getElementById('envCooldown').textContent = (data.requestCooldownMs ?? '-') + 'ms';
+        } catch(e) {}
+    },
+
+    async saveAgentId() {
+        const input = document.getElementById('agentIdInput');
+        if (!input || !input.value.trim()) return;
+        try {
+            await fetch('/api/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agentId: input.value.trim() })
+            });
+            alert('Agent ID 已更新');
+        } catch(e) {
+            alert('保存失败: ' + e.message);
+        }
+    },
+
+    async checkCookie() {
+        const el = document.getElementById('cookieResult');
+        if (!el) return;
+        el.textContent = '检测中...';
+        el.style.color = '#888';
+        try {
+            const res = await fetch('/v1/chat/completions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'deep_seek_v3',
+                    messages: [{ role: 'user', content: 'ping' }],
+                })
+            });
+            if (res.status === 200) {
+                el.textContent = '✅ 有效';
+                el.style.color = '#0f0';
+            } else if (res.status === 401) {
+                el.textContent = '❌ Cookie 过期';
+                el.style.color = '#f44';
+            } else {
+                el.textContent = '⚠️ 返回 ' + res.status;
+                el.style.color = '#ffa500';
+            }
+        } catch(e) {
+            el.textContent = '❌ 请求失败';
+            el.style.color = '#f44';
+        }
+    },
+
+    copyEndpoint(btn, text) {
+        navigator.clipboard.writeText(text).then(() => {
+            btn.textContent = '✅';
+            setTimeout(() => btn.textContent = '📋', 1500);
+        }).catch(() => {
+            // Fallback for non-HTTPS
+            const input = btn.previousElementSibling;
+            if (input && input.select) {
+                input.select();
+                document.execCommand('copy');
+            }
+        });
     },
 
     async loadLogs() {
