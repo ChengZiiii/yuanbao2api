@@ -130,6 +130,20 @@ func HandleAnthropicMessages(c *gin.Context) {
 
 	msgID := fmt.Sprintf("msg_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:24])
 
+	// 请求日志埋点
+	logStart := time.Now()
+	defer func() {
+		statusCode := c.Writer.Status()
+		dur := time.Since(logStart)
+		note := ""
+		if req.Stream {
+			note = "stream"
+		} else {
+			note = "non-stream"
+		}
+		LogRequest("POST", "/v1/messages", model, statusCode, dur, note)
+	}()
+
 	if req.Stream {
 		handleAnthropicStream(c, resp, model, req.Tools, msgID)
 	} else {

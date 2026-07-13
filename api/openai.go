@@ -123,6 +123,20 @@ func HandleOpenAIChatCompletion(c *gin.Context) {
 		return
 	}
 
+	// 请求日志埋点
+	logStart := time.Now()
+	defer func() {
+		statusCode := c.Writer.Status()
+		dur := time.Since(logStart)
+		note := ""
+		if req.Stream {
+			note = "stream"
+		} else {
+			note = "non-stream"
+		}
+		LogRequest("POST", "/v1/chat/completions", model, statusCode, dur, note)
+	}()
+
 	if req.Stream {
 		handleOpenAIStream(c, resp, model, req.Tools)
 	} else {
