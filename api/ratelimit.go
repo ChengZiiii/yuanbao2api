@@ -49,6 +49,21 @@ func InitRateLimiter() *RateLimiter {
 		cooldown = 0
 	}
 
+	// 持久化覆盖 env 默认值（runtime_config.json > env > 内置默认值）
+	rc := LoadRuntimeConfig()
+	if rc.MaxConcurrency > 0 {
+		maxC = rc.MaxConcurrency
+		if maxC < 1 {
+			maxC = 1
+		}
+	}
+	if rc.QueueTimeoutSeconds > 0 {
+		qTimeout = time.Duration(rc.QueueTimeoutSeconds) * time.Second
+	}
+	if rc.RequestCooldownMs > 0 {
+		cooldown = time.Duration(rc.RequestCooldownMs) * time.Millisecond
+	}
+
 	globalRateLimiter = &RateLimiter{
 		sem:            make(chan struct{}, maxC),
 		maxConcurrency: maxC,
