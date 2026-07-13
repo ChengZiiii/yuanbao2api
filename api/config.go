@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -70,10 +71,13 @@ func HandleGetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, serverConfig)
 }
 
-// HandleSetConfig updates the server configuration
+// HandleSetConfig updates the server configuration. The request body is read
+// as a raw map so that omitted fields do NOT zero-out existing values
+// (avoids the Go zero-value pitfall when binding partial updates into a
+// struct).
 func HandleSetConfig(c *gin.Context) {
-	var req ServerConfigData
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var body map[string]interface{}
+	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -81,20 +85,75 @@ func HandleSetConfig(c *gin.Context) {
 	serverConfigLock.Lock()
 	defer serverConfigLock.Unlock()
 
-	if req.DeepThinking != serverConfig.DeepThinking {
-		serverConfig.DeepThinking = req.DeepThinking
+	// 原有字段：仅在 key 存在时更新
+	if v, ok := body["deepThinking"]; ok {
+		if b, ok := v.(bool); ok {
+			serverConfig.DeepThinking = b
+		}
 	}
-	if req.InternetSearch != serverConfig.InternetSearch {
-		serverConfig.InternetSearch = req.InternetSearch
+	if v, ok := body["internetSearch"]; ok {
+		if b, ok := v.(bool); ok {
+			serverConfig.InternetSearch = b
+		}
 	}
-	if req.DefaultModel != "" {
-		serverConfig.DefaultModel = req.DefaultModel
+	if v, ok := body["defaultModel"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			serverConfig.DefaultModel = s
+		}
 	}
-	if req.AgentID != "" {
-		serverConfig.AgentID = req.AgentID
+	if v, ok := body["agentId"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			serverConfig.AgentID = s
+		}
+	}
+
+	// 新增并发字段
+	changed := false
+	if v, ok := body["maxConcurrency"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			serverConfig.MaxConcurrency = n
+			changed = true
+		}
+	}
+	if v, ok := body["queueTimeoutSeconds"]; ok {
+		if n, ok := toInt(v); ok && n > 0 {
+			serverConfig.QueueTimeoutSeconds = n
+			changed = true
+		}
+	}
+	if v, ok := body["requestCooldownMs"]; ok {
+		if n, ok := toInt(v); ok && n >= 0 {
+			serverConfig.RequestCooldownMs = n
+			changed = true
+		}
+	}
+
+	// 持久化
+	if changed {
+		cfg := RuntimeConfig{
+			MaxConcurrency:      serverConfig.MaxConcurrency,
+			QueueTimeoutSeconds: serverConfig.QueueTimeoutSeconds,
+			RequestCooldownMs:   serverConfig.RequestCooldownMs,
+		}
+		if err := SaveRuntimeConfig(cfg); err != nil {
+			log.Printf("保存运行时配置失败: %v", err)
+		}
 	}
 
 	c.JSON(http.StatusOK, serverConfig)
+}
+
+// toInt safely extracts an integer from a JSON-decoded value (numbers come
+// back as float64 by default in Go's json package).
+func toInt(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	default:
+		return 0, false
+	}
 }
 
 // SyncAgentID copies the env YUANBAO_AGENT_ID into serverConfig if not set.

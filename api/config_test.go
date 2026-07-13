@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -172,6 +173,62 @@ func TestHandleSetConfig_AcceptsAgentID(t *testing.T) {
 type readCloser struct {
 	data string
 	pos  int
+}
+
+func TestHandleSetConfig_PartialUpdateDoesNotZeroOtherFields(t *testing.T) {
+	resetServerConfig()
+
+	// 预设：DeepThinking=true
+	serverConfigLock.Lock()
+	serverConfig.DeepThinking = true
+	serverConfigLock.Unlock()
+
+	// 只发 maxConcurrency，不发 deepThinking
+	body := `{"maxConcurrency":7}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", nil)
+	c.Request.Body = &readCloser{data: body}
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	// 指向临时路径，避免污染真实磁盘
+	t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "rc.json"))
+
+	HandleSetConfig(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. body=%s", w.Code, w.Body.String())
+	}
+
+	cfg := GetServerConfig()
+	if cfg.DeepThinking != true {
+		t.Errorf("DeepThinking should remain true, got %v", cfg.DeepThinking)
+	}
+	if cfg.MaxConcurrency != 7 {
+		t.Errorf("MaxConcurrency: got %d, want 7", cfg.MaxConcurrency)
+	}
+}
+
+func TestHandleSetConfig_PersistsRuntimeConfig(t *testing.T) {
+	resetServerConfig()
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "rc.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	body := `{"maxConcurrency":3,"queueTimeoutSeconds":80,"requestCooldownMs":400}`
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", nil)
+	c.Request.Body = &readCloser{data: body}
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	HandleSetConfig(c)
+
+	// 文件应被写入
+	loaded := LoadRuntimeConfig()
+	if loaded.MaxConcurrency != 3 || loaded.QueueTimeoutSeconds != 80 || loaded.RequestCooldownMs != 400 {
+		t.Errorf("runtime_config.json not persisted correctly: %+v", loaded)
+	}
 }
 
 func (r *readCloser) Read(p []byte) (n int, err error) {
