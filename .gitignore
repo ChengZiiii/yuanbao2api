@@ -4,3 +4,5 @@
 .DS_Store
 元宝nodejs/node_modules
 .snow/
+.kilo/
+AGENTS.md
