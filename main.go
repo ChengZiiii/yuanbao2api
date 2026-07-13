@@ -39,10 +39,11 @@ func main() {
 		c.Next()
 	})
 
-	// Serve index.html at root
+	// Serve index.html at root + static assets from public/
 	r.GET("/", func(c *gin.Context) {
 		c.File("./public/index.html")
 	})
+	r.Static("/", "./public")
 
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
