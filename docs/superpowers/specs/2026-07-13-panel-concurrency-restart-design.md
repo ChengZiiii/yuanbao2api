@@ -263,3 +263,35 @@ goto loop
 - 负数或零值视为"未设置"，不覆盖 env
 - 重启端点不验证 Cookie 有效性等——它只负责退出进程
 - 重启时如果存在挂起的请求，**它们会中断**（`os.Exit`），这是设计上接受的（配置变更本来就应避开业务高峰）
+
+## 未来兼容：多 Provider 架构
+
+本项目长期计划演化为"统一本地网页代理多家 web2api"（元宝 / ChatGPT / Gemini 等）。当前 spec 是这条主线的子集（共享基础设施层）。
+
+### 本次改动在多 Provider 架构中的位置
+
+| 改动 | 多 Provider 下的位置 |
+|------|---------------------|
+| `runtime_config.json` 持久化 | 升级为"全局共享配置"（API_KEY / PORT / 共享并发参数等） |
+| `LoadRuntimeConfig` / `SaveRuntimeConfig` | 复用，新增 `LoadProviderConfig(id)` / `SaveProviderConfig(id, cfg)` |
+| `InitRateLimiter` 启动时合并 | 复用，可能拆成"全局 limiter + 每 provider limiter" |
+| `POST /api/restart` 重启机制 | 完全复用 |
+| `restart.bat` | 完全复用 |
+
+### 本次刻意**不**做的事
+
+为避免越界，本次 spec 不做以下事：
+- 不重构管理面板为 `Providers/<id>/` 嵌套结构
+- 不把 `YUANBAO_COOKIE` / `YUANBAO_AGENT_ID` 等 provider 专属配置迁出"运行时配置"section
+- 不实现 provider 注册/路由分发
+
+这些是未来 multi-provider spec 的范围。
+
+### 未来工作的入口点（占位）
+
+未来 multi-provider 改造启动时，应直接复用本 spec 落地的：
+- `api/config_persist.go` 的 `RuntimeConfig` / Load / Save 模式
+- `api/restart.go` 的重启模式
+- `HandleSetConfig` 按 key 存在性更新模式（已为部分更新打好基础）
+
+后续 spec 命名建议：`docs/superpowers/specs/YYYY-MM-DD-multi-provider-architecture-design.md`。
