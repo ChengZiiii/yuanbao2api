@@ -45,6 +45,6 @@ func HandleEnv(c *gin.Context) {
 		"requestCooldownMs":   cooldown,
 		"yuanbaoAgentId":      getAgentID(),
 		"yuanbaoCookie":       maskCookie(cookie),
-		"apiKey":              maskKey(apiKey),
+		"apiKey":              apiKey,
 	})
 }

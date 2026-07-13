@@ -1,13 +1,22 @@
 const App = {
     config: { deepThinking: false, internetSearch: false, defaultModel: 'deep_seek_v3' },
+    apiKey: '',
     _messages: [],
     currentTab: 'dashboard',
+
+    // Helper: return headers with auth if API key is set
+    _authHeaders(extra) {
+        const h = { 'Content-Type': 'application/json', ...(extra || {}) };
+        if (this.apiKey) h['Authorization'] = 'Bearer ' + this.apiKey;
+        return h;
+    },
 
     init() {
         this.loadConfig();
         this.checkStatus();
         this.loadStatus();
         this.loadLogs();
+        this.loadEnv();  // pre-load API key for test auth
         setInterval(() => this.checkStatus(), 30000);
         setInterval(() => this.loadStatus(), 2000);
         // tab switching
@@ -140,7 +149,7 @@ const App = {
         try {
             // Primary model request
             const dsRes = await fetch('/v1/chat/completions', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                method: 'POST', headers: this._authHeaders(),
                 body: makeBody(testModel)
             });
             const dsData = await dsRes.json();
@@ -154,7 +163,7 @@ const App = {
             if (compare) {
                 // Secondary model request (opposite of selected)
                 const hyRes = await fetch('/v1/chat/completions', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST', headers: this._authHeaders(),
                     body: makeBody(secondaryModel)
                 });
                 const hyData = await hyRes.json();
@@ -198,9 +207,10 @@ const App = {
         try {
             const res = await fetch('/api/env');
             const data = await res.json();
+            this.apiKey = data.apiKey || '';
             document.getElementById('envCookie').textContent = data.yuanbaoCookie || '-';
             document.getElementById('envAgentId').textContent = data.yuanbaoAgentId || '-';
-            document.getElementById('envApiKey').textContent = data.apiKey || '-';
+            document.getElementById('envApiKey').textContent = data.apiKey ? data.apiKey.substring(0, 8) + '****' : '-';
             document.getElementById('envPort').textContent = data.port || '-';
             document.getElementById('envGinMode').textContent = data.ginMode || '-';
             document.getElementById('envMaxC').textContent = data.maxConcurrency ?? '-';
@@ -232,7 +242,7 @@ const App = {
         try {
             const res = await fetch('/v1/chat/completions', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this._authHeaders(),
                 body: JSON.stringify({
                     model: 'deep_seek_v3',
                     messages: [{ role: 'user', content: 'ping' }],
@@ -242,7 +252,7 @@ const App = {
                 el.textContent = '✅ 有效';
                 el.style.color = '#0f0';
             } else if (res.status === 401) {
-                el.textContent = '❌ Cookie 过期';
+                el.textContent = this.apiKey ? '❌ API Key 无效或 Cookie 过期' : '❌ Cookie 过期';
                 el.style.color = '#f44';
             } else {
                 el.textContent = '⚠️ 返回 ' + res.status;
