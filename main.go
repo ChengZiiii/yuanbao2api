@@ -63,6 +63,7 @@ func main() {
 		config.GET("/config", api.HandleGetConfig)
 		config.POST("/config", api.HandleSetConfig)
 		config.GET("/status", api.HandleStatus)
+		config.GET("/env", api.HandleEnv)
 	}
 
 	// Start server
