@@ -35,16 +35,6 @@ func HandleOpenAIModels(c *gin.Context) {
 				Parent:      nil,
 				Description: "Hy3 preview - 腾讯混元大模型，全能处理",
 			},
-			{
-				ID:          "gpt_175B_0404",
-				Object:      "model",
-				Created:     1704067200,
-				OwnedBy:     "yuanbao",
-				Permission:  []interface{}{},
-				Root:        "gpt_175B_0404",
-				Parent:      nil,
-				Description: "元宝内部模型标识",
-			},
 		},
 	})
 }
