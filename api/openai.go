@@ -381,14 +381,27 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 		sendChunk(delta)
 	}
 
-	// Send finish
+	// Send finish chunk — delta must be empty, finish_reason at choices[0] level
 	finishReason := "stop"
 	if hasToolCalls {
 		finishReason = "tool_calls"
 	}
-	sendChunk(map[string]interface{}{
-		"finish_reason": finishReason,
-	})
+	chunkID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixMilli())
+	finishChunk := map[string]interface{}{
+		"id":      chunkID,
+		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index":         0,
+				"delta":         map[string]interface{}{},
+				"finish_reason": finishReason,
+			},
+		},
+	}
+	data, _ := json.Marshal(finishChunk)
+	fmt.Fprintf(c.Writer, "data: %s\n\n", data)
 	fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
 	safeFlush(c.Writer)
 }
