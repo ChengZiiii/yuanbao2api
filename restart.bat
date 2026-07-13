@@ -2,12 +2,12 @@
 title yuanbao2api
 pushd "%~dp0"
 echo ========================================
-echo  元宝2API 服务启动器（自动重启循环）
-echo  关闭此窗口即可停止服务
+echo  yuanbao2api service launcher (auto-restart loop)
+echo  Close this window to stop the service
 echo ========================================
 :loop
-echo [%date% %time%] 启动服务...
+echo [%date% %time%] Starting service...
 "%~dp0main.exe"
-echo [%date% %time%] 服务已退出，5 秒后重启...
-timeout /t 5 >nul
+echo [%date% %time%] Service exited, restarting in 5 seconds...
+ping 127.0.0.1 -n 6 >nul
 goto loop
