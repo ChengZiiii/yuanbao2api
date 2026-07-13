@@ -78,6 +78,10 @@
                     <button class="btn" onclick="App.testAPI()">发送测试</button>
                 </div>
                 <div class="test-options">
+                    <select id="testModelSelect" class="model-select">
+                        <option value="deep_seek_v3">DeepSeek</option>
+                        <option value="hunyuan">Hunyuan</option>
+                    </select>
                     <label class="toggle-pill"><input type="checkbox" id="streamToggle"> stream</label>
                     <label class="toggle-pill"><input type="checkbox" id="multiTurnToggle"> 多轮对话</label>
                     <label class="toggle-pill"><input type="checkbox" id="compareToggle"> 双模型对比</label>

@@ -22,6 +22,10 @@ const App = {
         document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
         if (name === 'dashboard') { this.loadStatus(); this.loadLogs(); }
         if (name === 'config') { this.loadEnv(); }
+        if (name === 'testing') {
+            const ts = document.getElementById('testModelSelect');
+            if (ts) ts.value = this.config.defaultModel;
+        }
     },
 
     async loadConfig() {
@@ -49,6 +53,8 @@ const App = {
         if (is) is.classList.toggle('active', this.config.internetSearch);
         const ms = document.getElementById('modelSelect');
         if (ms) ms.value = this.config.defaultModel;
+        const ts = document.getElementById('testModelSelect');
+        if (ts) ts.value = this.config.defaultModel;
         const ai = document.getElementById('agentIdInput');
         if (ai) ai.value = this.config.agentId || '';
     },
@@ -82,6 +88,8 @@ const App = {
         const message = document.getElementById('testMessage');
         if (!message || !message.value.trim()) return;
 
+        // Read selected model from the dropdown
+        const testModel = document.getElementById('testModelSelect')?.value || 'deep_seek_v3';
         const stream = document.getElementById('streamToggle')?.checked || false;
         const compare = document.getElementById('compareToggle')?.checked || false;
         const multiTurn = document.getElementById('multiTurnToggle')?.checked || false;
@@ -91,6 +99,10 @@ const App = {
         const dsStatus = document.getElementById('dsStatus');
         const hyStatus = document.getElementById('hyStatus');
         const hyBox = document.getElementById('hyBox');
+
+        // Model display names for headers
+        const modelNames = { deep_seek_v3: 'DeepSeek', hunyuan: 'Hunyuan' };
+        const secondaryModel = testModel === 'deep_seek_v3' ? 'hunyuan' : 'deep_seek_v3';
 
         // Multi-turn: manage message history
         let messages;
@@ -106,20 +118,30 @@ const App = {
             messages: messages,
         });
 
-        // Show DeepSeek result box, optionally show Hunyuan
-        dsEl.textContent = '请求中...';
-        dsStatus.textContent = '';
-        if (hyBox) {
+        // Update result box headers (text only, preserve status span element)
+        const dsHeader = dsEl.previousElementSibling;
+        if (dsHeader && dsHeader.childNodes[0]) {
+            dsHeader.childNodes[0].textContent = '← ' + (modelNames[testModel] || testModel) + ' ';
+        }
+        if (hyEl) {
+            const hyHeader = hyEl.previousElementSibling;
+            if (hyHeader && hyHeader.childNodes[0]) {
+                hyHeader.childNodes[0].textContent = '← ' + (modelNames[secondaryModel] || secondaryModel) + ' ';
+            }
             hyBox.style.display = compare ? 'block' : 'none';
         }
+
+        // Show request in progress
+        dsEl.textContent = '请求中...';
+        dsStatus.textContent = '';
         if (hyEl) hyEl.textContent = compare ? '请求中...' : '';
         if (hyStatus) hyStatus.textContent = '';
 
         try {
-            // DeepSeek request
+            // Primary model request
             const dsRes = await fetch('/v1/chat/completions', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: makeBody('deep_seek_v3')
+                body: makeBody(testModel)
             });
             const dsData = await dsRes.json();
             const dsContent = dsData.choices?.[0]?.message?.content || JSON.stringify(dsData);
@@ -130,10 +152,10 @@ const App = {
             }
 
             if (compare) {
-                // Hunyuan request (only if compare mode)
+                // Secondary model request (opposite of selected)
                 const hyRes = await fetch('/v1/chat/completions', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: makeBody('hunyuan')
+                    body: makeBody(secondaryModel)
                 });
                 const hyData = await hyRes.json();
                 const hyContent = hyData.choices?.[0]?.message?.content || JSON.stringify(hyData);
@@ -269,5 +291,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('modelSelect')?.addEventListener('change', function() {
         App.config.defaultModel = this.value;
         App.saveConfig();
+        // Sync testing panel model selector too
+        const ts = document.getElementById('testModelSelect');
+        if (ts) ts.value = this.value;
     });
 });

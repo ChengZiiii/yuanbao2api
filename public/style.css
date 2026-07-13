@@ -316,3 +316,5 @@
         .endpoint-row input { flex:1; padding:10px 12px; background:#000; border:1px solid #333; border-radius:4px; color:#888; font-size:12px; font-family:monospace; }
         .btn-sm { padding:6px 12px; background:#222; color:#fff; border:1px solid #333; border-radius:4px; font-size:12px; cursor:pointer; }
         .btn-sm:hover { background:#333; }
+        .model-select { padding:8px 14px; background:#000; border:1px solid #333; border-radius:20px; color:#fff; font-size:13px; outline:none; cursor:pointer; }
+        .model-select:focus { border-color:#666; }
