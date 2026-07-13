@@ -16,11 +16,14 @@
 - **联网搜索**：实时获取网络信息
 - **多轮对话**：通过 messages 数组传递历史
 - **临时会话**：自动创建临时对话，不在元宝界面留记录
-- **Web 管理面板**：黑白简约风格的可视化控制台
+- **可选 API 密钥认证**：设置 `API_KEY` 后 Bearer token 鉴权，可对接第三方客户端
+- **Web 管理面板**：4 个功能标签页（仪表盘 / 测试区 / 配置 / API 信息）
+- **并发控制 + FIFO 队列**：超过最大并发的请求自动排队，可配置超时和冷却时间
+- **请求日志**：内存环形缓冲区，保存最近 200 条请求记录
 
 ## 技术栈
 
-- **后端语言**：Go 1.19+
+- **后端语言**：Go 1.21+
 - **Web 框架**：Gin
 - **前端**：HTML/CSS/JavaScript
 - **环境管理**：godotenv
@@ -40,6 +43,17 @@
 │   ├── anthropic.go          # Anthropic 兼容接口实现
 │   ├── models.go             # 模型配置和映射
 │   └── config.go             # API 配置
+│   ├── env.go                # 环境变量接口（GET /api/env）
+│   ├── logger.go             # 请求日志环形缓冲区（GET /api/logs）
+│   └── ratelimit.go          # 并发控制（信号量闸门 + 队列）
+│
+├── yuanbao/                   # 元宝 API 交互模块
+│   └── client.go             # 元宝 API 客户端
+│
+├── public/                    # 静态文件（Web 管理面板）
+│   ├── index.html            # SPA 管理面板（4 个 tab）
+│   ├── style.css             # 暗色主题样式
+│   └── app.js                # 面板交互逻辑
 │
 ├── config/                    # 配置管理
 │   └── config.go             # 环境变量加载
@@ -84,11 +98,15 @@ document.cookie
 
 ### 2. 配置环境变量
 
-在项目根目录创建 `.env` 文件：
+在项目根目录创建 `.env` 文件（参考 `.env.example`）：
 
 ```bash
 # 必需：从浏览器复制的完整 Cookie
 YUANBAO_COOKIE="your_cookie_here"
+
+# 可选：API Key — 第三方软件需要填写 API Key 才能使用
+# 设置后请求需加 Authorization: Bearer <值>；不设置则无需认证
+API_KEY=sk-your-key-here
 
 # 可选：Agent ID（默认: naQivTmsDa）
 YUANBAO_AGENT_ID="naQivTmsDa"
@@ -98,6 +116,13 @@ PORT=3000
 
 # 可选：Gin 运行模式（debug 或 release，默认: debug）
 GIN_MODE=debug
+
+# 最大并发请求数（默认: 1），超过的请求自动排队
+MAX_CONCURRENCY=1
+# 排队超时（秒，默认: 120），超时返回 429
+QUEUE_TIMEOUT_SECONDS=120
+# 请求冷却时间（毫秒），降低风控概率
+REQUEST_COOLDOWN_MS=800
 ```
 
 ### 3. 安装并启动
@@ -127,7 +152,11 @@ docker run -p 3000:3000 --env-file .env yuanbao2api
 访问 http://localhost:3000 查看管理面板，或测试 API：
 
 ```bash
+# 未设置 API_KEY 时（无需认证）
 curl http://localhost:3000/v1/models
+
+# 已设置 API_KEY 时（需加 Authorization 头）
+curl http://localhost:3000/v1/models -H "Authorization: Bearer your-api-key"
 ```
 
 ## 支持的模型
@@ -141,6 +170,8 @@ curl http://localhost:3000/v1/models
 不指定模型时默认使用 DeepSeek V3.2。
 
 ## API 使用示例
+
+> 如果设置了 `API_KEY`，所有请求需添加 `-H "Authorization: Bearer your-key"`。
 
 ### 基础聊天
 
@@ -299,13 +330,13 @@ curl http://localhost:3000/v1/messages \
 
 ### Python SDK 示例
 
-**OpenAI SDK**：
+**OpenAI SDK**（未设 `API_KEY` 时 `api_key` 可填任意值）：
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="dummy",
+    api_key="not-needed",  # 未设置 API_KEY 时任意值即可
     base_url="http://localhost:3000/v1"
 )
 
@@ -344,7 +375,7 @@ if response.choices[0].finish_reason == "tool_calls":
 import anthropic
 
 client = anthropic.Anthropic(
-    api_key="dummy",
+    api_key="not-needed",  # 未设置 API_KEY 时任意值即可
     base_url="http://localhost:3000"
 )
 
@@ -354,6 +385,40 @@ response = client.messages.create(
     messages=[{"role": "user", "content": "你好"}]
 )
 print(response.content[0].text)
+```
+
+## 第三方客户端接入
+
+本服务兼容 OpenAI API 格式，可直接对接各种第三方客户端。
+
+### 需要 API Key 的软件（NextChat / OpenCat / ChatBox / LobeChat 等）
+
+在 `.env` 中设置 `API_KEY`（任意值，自己记住即可），然后在客户端中：
+
+| 字段 | 值 |
+|------|-----|
+| 接口地址 | `http://localhost:3000` **或** `http://localhost:3000/v1` |
+| API Key | 与 `API_KEY` 环境变量一致 |
+| 模型名 | `deep_seek_v3`（DeepSeek）或 `hunyuan`（Hunyuan） |
+
+> 未设置 `API_KEY` 时，/v1/* 接口无需认证，但部分客户端强制要求填写 API Key，此时填入任意字符串即可（服务端不会校验）。
+
+### Python SDK（已设 API_KEY）
+
+```python
+from openai import OpenAI
+
+# 需先在 .env 中设置 API_KEY，或在此填入相同值
+client = OpenAI(
+    api_key="填入 API_KEY 的值",
+    base_url="http://localhost:3000/v1"
+)
+
+response = client.chat.completions.create(
+    model="deep_seek_v3",
+    messages=[{"role": "user", "content": "你好"}]
+)
+print(response.choices[0].message.content)
 ```
 
 ## 工作原理
@@ -427,15 +492,18 @@ print(response.content[0].text)
 | 变量 | 必需 | 默认值 | 说明 |
 |------|------|--------|------|
 | `YUANBAO_COOKIE` | ✓ | — | 从浏览器复制的完整 Cookie |
+| `API_KEY` | ✗ | — | API 密钥，第三方软件需填入此值（设后 Bearer token 认证） |
 | `YUANBAO_AGENT_ID` | ✗ | `naQivTmsDa` | 元宝 Agent ID |
 | `PORT` | ✗ | `3000` | 服务监听端口 |
 | `GIN_MODE` | ✗ | `debug` | Gin 运行模式（`debug` 或 `release`） |
+| `MAX_CONCURRENCY` | ✗ | `1` | 最大同时请求数，超过则排队 |
+| `QUEUE_TIMEOUT_SECONDS` | ✗ | `120` | 排队超时，超时返回 429 |
+| `REQUEST_COOLDOWN_MS` | ✗ | `0` | 请求完成后冷却时间（毫秒），单账号建议 500~1000 |
 
 ### 配置文件
 
 - `.env`：本地环境变量（不提交到 Git）
-- `.env.example`：环境变量示例模板
-- `config/config.go`：Go 配置结构和加载逻辑
+- `.env.example`：环境变量示例模板（已包含全部可用变量）
 
 ## 安全提示
 

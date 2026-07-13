@@ -12,6 +12,7 @@ OpenAI 兼容（`/v1/chat/completions`）和 Anthropic 兼容
 
 ## 必需 / 常用环境变量
 - `YUANBAO_COOKIE` — **必填**；从浏览器 DevTools 中任意 `/api/chat/` 请求复制完整 Cookie。
+- `API_KEY` — 可选；设置后 `/v1/*` 端点需 `Authorization: Bearer <值>` 认证；未设置则无需认证。
 - `YUANBAO_AGENT_ID` — 默认 `naQivTmsDa`。
 - `PORT` — 默认 `3000`。
 - `GIN_MODE` — 默认 `debug`。
