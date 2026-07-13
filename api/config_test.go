@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -175,7 +176,7 @@ type readCloser struct {
 
 func (r *readCloser) Read(p []byte) (n int, err error) {
 	if r.pos >= len(r.data) {
-		return 0, nil // io.EOF is handled by json decoder
+		return 0, io.EOF
 	}
 	n = copy(p, r.data[r.pos:])
 	r.pos += n
