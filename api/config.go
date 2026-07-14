@@ -196,7 +196,6 @@ func HandleSetConfig(c *gin.Context) {
 		var (
 			hyToken string
 			hyUser  string
-			seen    int
 		)
 		if raw, has := obj["hyToken"]; has {
 			s, isString := raw.(string)
@@ -205,7 +204,6 @@ func HandleSetConfig(c *gin.Context) {
 				return
 			}
 			hyToken = s
-			seen++
 		}
 		if raw, has := obj["hyUser"]; has {
 			s, isString := raw.(string)
@@ -214,7 +212,6 @@ func HandleSetConfig(c *gin.Context) {
 				return
 			}
 			hyUser = s
-			seen++
 		}
 		// Reject any unknown keys — keep the wire format strict so future
 		// additions stay explicit.
@@ -224,7 +221,6 @@ func HandleSetConfig(c *gin.Context) {
 				return
 			}
 		}
-		_ = seen
 		yuanbaoCookieSet = true
 		if hyToken != "" || hyUser != "" {
 			yc := YuanbaoCookie{HyToken: hyToken, HyUser: hyUser}
