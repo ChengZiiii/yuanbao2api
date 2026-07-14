@@ -32,10 +32,11 @@ type ServerConfigData struct {
 	AgentID string `json:"agentId"`
 
 	// YuanbaoCookie — optional override for YUANBAO_COOKIE. nil means
-	// "no runtime override" (fall back to env). Empty-string is NOT a valid
-	// value: HandleSetConfig maps "" to nil so the field never carries an
-	// empty string.
-	YuanbaoCookie *string `json:"yuanbaoCookie"`
+	// "no runtime override" (fall back to env). A pointer whose struct has
+	// both fields empty is treated the same as nil by EffectiveYuanbaoCookie:
+	// HandleSetConfig collapses an all-empty object into nil so the field
+	// never carries a meaningless zero-value pointer.
+	YuanbaoCookie *YuanbaoCookie `json:"yuanbaoCookie"`
 }
 
 // getEnvInt reads an integer environment variable, falling back to def on
@@ -51,7 +52,8 @@ func getEnvInt(key string, def int) int {
 
 // EffectiveYuanbaoCookie resolves the upstream Cookie that the yuanbao
 // client should send on its next request. Priority:
-//   1. ServerConfigData.YuanbaoCookie (runtime override, if non-nil/non-empty)
+//   1. ServerConfigData.YuanbaoCookie (runtime override, if non-nil and at
+//      least one field is non-empty after assembly)
 //   2. YUANBAO_COOKIE environment variable (if non-empty)
 //   3. "" (caller treats as "no cookie")
 //
@@ -59,9 +61,12 @@ func getEnvInt(key string, def int) int {
 // HandleEnv) MUST go through this function rather than reading env directly.
 func EffectiveYuanbaoCookie() string {
 	serverConfigLock.RLock()
-	defer serverConfigLock.RUnlock()
-	if serverConfig != nil && serverConfig.YuanbaoCookie != nil && *serverConfig.YuanbaoCookie != "" {
-		return *serverConfig.YuanbaoCookie
+	yc := serverConfig.YuanbaoCookie
+	serverConfigLock.RUnlock()
+	if yc != nil {
+		if h := yc.HeaderValue(); h != "" {
+			return h
+		}
 	}
 	return os.Getenv("YUANBAO_COOKIE")
 }
@@ -81,9 +86,9 @@ const (
 // EffectiveYuanbaoCookie first; if it returns "", this returns "none".
 func EffectiveYuanbaoCookieSource() YuanbaoCookieSource {
 	serverConfigLock.RLock()
-	hasRuntime := serverConfig != nil && serverConfig.YuanbaoCookie != nil && *serverConfig.YuanbaoCookie != ""
+	yc := serverConfig.YuanbaoCookie
 	serverConfigLock.RUnlock()
-	if hasRuntime {
+	if yc != nil && (yc.HyToken != "" || yc.HyUser != "") {
 		return CookieSourceRuntime
 	}
 	if v := os.Getenv("YUANBAO_COOKIE"); v != "" {
@@ -177,19 +182,53 @@ func HandleSetConfig(c *gin.Context) {
 	}
 
 	// yuanbaoCookie is optional. Presence of the key is what matters — its
-	// value (non-empty vs "") distinguishes "set" from "clear". Type errors
-	// (non-string) are rejected with HTTP 400.
+	// value (object with at least one non-empty field vs. all-empty/null/object)
+	// distinguishes "set" from "clear". The wire form is an object
+	// {hyToken, hyUser}; non-object values are rejected with HTTP 400.
 	var yuanbaoCookieSet bool
-	var yuanbaoCookieValue *string
+	var yuanbaoCookieValue *YuanbaoCookie
 	if v, ok := body["yuanbaoCookie"]; ok {
-		s, isString := v.(string)
-		if !isString {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie must be a string"})
+		obj, isObject := v.(map[string]interface{})
+		if !isObject {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie must be an object"})
 			return
 		}
+		var (
+			hyToken string
+			hyUser  string
+			seen    int
+		)
+		if raw, has := obj["hyToken"]; has {
+			s, isString := raw.(string)
+			if !isString {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie.hyToken must be a string"})
+				return
+			}
+			hyToken = s
+			seen++
+		}
+		if raw, has := obj["hyUser"]; has {
+			s, isString := raw.(string)
+			if !isString {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie.hyUser must be a string"})
+				return
+			}
+			hyUser = s
+			seen++
+		}
+		// Reject any unknown keys — keep the wire format strict so future
+		// additions stay explicit.
+		for k := range obj {
+			if k != "hyToken" && k != "hyUser" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie has unknown field: " + k})
+				return
+			}
+		}
+		_ = seen
 		yuanbaoCookieSet = true
-		if s != "" {
-			yuanbaoCookieValue = &s
+		if hyToken != "" || hyUser != "" {
+			yc := YuanbaoCookie{HyToken: hyToken, HyUser: hyUser}
+			yuanbaoCookieValue = &yc
 		}
 	}
 
