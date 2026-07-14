@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"yuanbao2api/yuanbao"
 )
 
 // ServerConfig holds the dynamic server configuration (same as internal/config but for API layer)
@@ -29,6 +30,12 @@ type ServerConfigData struct {
 
 	// AgentID — runtime-settable via /api/config
 	AgentID string `json:"agentId"`
+
+	// YuanbaoCookie — optional override for YUANBAO_COOKIE. nil means
+	// "no runtime override" (fall back to env). Empty-string is NOT a valid
+	// value: HandleSetConfig maps "" to nil so the field never carries an
+	// empty string.
+	YuanbaoCookie *string `json:"yuanbaoCookie"`
 }
 
 // getEnvInt reads an integer environment variable, falling back to def on
@@ -40,6 +47,63 @@ func getEnvInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// EffectiveYuanbaoCookie resolves the upstream Cookie that the yuanbao
+// client should send on its next request. Priority:
+//   1. ServerConfigData.YuanbaoCookie (runtime override, if non-nil/non-empty)
+//   2. YUANBAO_COOKIE environment variable (if non-empty)
+//   3. "" (caller treats as "no cookie")
+//
+// This is the single resolution entry point; upstream callers (yuanbao/client.go,
+// HandleEnv) MUST go through this function rather than reading env directly.
+func EffectiveYuanbaoCookie() string {
+	serverConfigLock.RLock()
+	defer serverConfigLock.RUnlock()
+	if serverConfig != nil && serverConfig.YuanbaoCookie != nil && *serverConfig.YuanbaoCookie != "" {
+		return *serverConfig.YuanbaoCookie
+	}
+	return os.Getenv("YUANBAO_COOKIE")
+}
+
+// YuanbaoCookieSource describes where the currently-effective Cookie came from.
+// It mirrors the cookieSource field exposed via /api/env.
+type YuanbaoCookieSource string
+
+const (
+	CookieSourceRuntime YuanbaoCookieSource = "runtime"
+	CookieSourceEnv     YuanbaoCookieSource = "env"
+	CookieSourceNone    YuanbaoCookieSource = "none"
+)
+
+// EffectiveYuanbaoCookieSource reports whether the effective Cookie came from
+// the runtime override or the env var. Callers must call
+// EffectiveYuanbaoCookie first; if it returns "", this returns "none".
+func EffectiveYuanbaoCookieSource() YuanbaoCookieSource {
+	serverConfigLock.RLock()
+	hasRuntime := serverConfig != nil && serverConfig.YuanbaoCookie != nil && *serverConfig.YuanbaoCookie != ""
+	serverConfigLock.RUnlock()
+	if hasRuntime {
+		return CookieSourceRuntime
+	}
+	if v := os.Getenv("YUANBAO_COOKIE"); v != "" {
+		return CookieSourceEnv
+	}
+	return CookieSourceNone
+}
+
+// init wires the yuanbao client's CookieResolver to this package's
+// EffectiveYuanbaoCookie. This must run after yuanbao's package init
+// (which sets the default to a no-op). Go's import order guarantees
+// that: api imports yuanbao, so yuanbao's init runs first.
+//
+// We cannot call EffectiveYuanbaoCookie directly from the yuanbao
+// package because that would create an import cycle (api already
+// imports yuanbao for NewClient). The function pointer indirection
+// keeps the resolution logic in one place (here) while letting the
+// client stay cycle-free.
+func init() {
+	yuanbao.CookieResolver = EffectiveYuanbaoCookie
 }
 
 // HandleStatus returns live concurrency/queue stats for observability.
@@ -112,6 +176,23 @@ func HandleSetConfig(c *gin.Context) {
 		requestCooldownMs = &n
 	}
 
+	// yuanbaoCookie is optional. Presence of the key is what matters — its
+	// value (non-empty vs "") distinguishes "set" from "clear". Type errors
+	// (non-string) are rejected with HTTP 400.
+	var yuanbaoCookieSet bool
+	var yuanbaoCookieValue *string
+	if v, ok := body["yuanbaoCookie"]; ok {
+		s, isString := v.(string)
+		if !isString {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie must be a string"})
+			return
+		}
+		yuanbaoCookieSet = true
+		if s != "" {
+			yuanbaoCookieValue = &s
+		}
+	}
+
 	serverConfigLock.Lock()
 	defer serverConfigLock.Unlock()
 
@@ -150,6 +231,10 @@ func HandleSetConfig(c *gin.Context) {
 		serverConfig.RequestCooldownMs = *requestCooldownMs
 		changed = true
 	}
+	if yuanbaoCookieSet {
+		serverConfig.YuanbaoCookie = yuanbaoCookieValue
+		changed = true
+	}
 
 	if changed {
 		maxConcurrency := serverConfig.MaxConcurrency
@@ -159,6 +244,7 @@ func HandleSetConfig(c *gin.Context) {
 			MaxConcurrency:      &maxConcurrency,
 			QueueTimeoutSeconds: &queueTimeoutSeconds,
 			RequestCooldownMs:   &requestCooldownMs,
+			YuanbaoCookie:       serverConfig.YuanbaoCookie,
 		}
 		if err := SaveRuntimeConfig(cfg); err != nil {
 			log.Printf("保存运行时配置失败: %v", err)

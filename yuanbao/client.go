@@ -12,12 +12,22 @@ import (
 	"time"
 )
 
+// CookieResolver returns the upstream Cookie that the client should send
+// on the next request. It is set by the api package on package init to
+// api.EffectiveYuanbaoCookie(). The default returns "" so that an
+// uninitialized Client (e.g. unit tests) does not leak environment state.
+//
+// This indirection exists to avoid an import cycle: api imports yuanbao
+// (for NewClient / SendRequestWithID), so yuanbao cannot import api to
+// call the helper directly. The api package owns the resolution logic;
+// the yuanbao package merely invokes whatever the api package wired up.
+var CookieResolver = func() string { return "" }
+
 // Config holds the Yuanbao API configuration
 type Config struct {
 	BaseURL      string
 	ChatEndpoint string
 	Headers      http.Header
-	Cookies      string
 }
 
 // Client provides methods to communicate with the Yuanbao API
@@ -25,10 +35,12 @@ type Client struct {
 	Config *Config
 }
 
-// NewClient creates a new Yuanbao API client
+// NewClient creates a new Yuanbao API client. The Cookie is intentionally
+// NOT captured here: every outbound request resolves the effective Cookie
+// through CookieResolver (wired to api.EffectiveYuanbaoCookie) so that
+// runtime updates via POST /api/config take effect after a restart
+// without rebuilding the client. (See the "runtime-cookie" change.)
 func NewClient() *Client {
-	cookie := os.Getenv("YUANBAO_COOKIE")
-
 	headers := http.Header{}
 	headers.Set("x-device-id", "")
 	headers.Set("x-language", "zh-CN")
@@ -48,7 +60,6 @@ func NewClient() *Client {
 			BaseURL:      "https://yuanbao.tencent.com",
 			ChatEndpoint: "/api/chat",
 			Headers:      headers,
-			Cookies:      cookie,
 		},
 	}
 }
@@ -106,11 +117,13 @@ func (c *Client) SendRequestWithID(request YuanbaoRequest, agentID string, conve
 		}
 	}
 
-	// Set cookie and other required headers
-	if c.Config.Cookies != "" {
-		req.Header.Set("cookie", c.Config.Cookies)
-	} else {
-		req.Header.Set("cookie", os.Getenv("YUANBAO_COOKIE"))
+	// Set cookie and other required headers. The Cookie is resolved per
+	// request via the CookieResolver function pointer (wired by the api
+	// package to EffectiveYuanbaoCookie). An empty value means we
+	// deliberately skip setting the header (matching the spec's "两者皆空"
+	// scenario).
+	if cookie := CookieResolver(); cookie != "" {
+		req.Header.Set("cookie", cookie)
 	}
 	req.Header.Set("x-agentid", fmt.Sprintf("%s/%s", agentID, conversationID))
 	req.Header.Set("x-timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))

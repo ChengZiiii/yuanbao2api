@@ -215,6 +215,12 @@ const App = {
             const data = await res.json();
             this.apiKey = data.apiKey || '';
             document.getElementById('envCookie').textContent = data.yuanbaoCookie || '-';
+            const sourceEl = document.getElementById('cookieSource');
+            if (sourceEl) {
+                const source = data.cookieSource || 'none';
+                const labelMap = { runtime: '🟢 runtime', env: '🟡 env', none: '⚪ none' };
+                sourceEl.textContent = '[' + (labelMap[source] || source) + ']';
+            }
             document.getElementById('envAgentId').textContent = data.yuanbaoAgentId || '-';
             document.getElementById('envApiKey').textContent = data.apiKey ? data.apiKey.substring(0, 8) + '****' : '-';
             document.getElementById('envPort').textContent = data.port || '-';
@@ -268,6 +274,34 @@ const App = {
             el.textContent = '❌ 请求失败';
             el.style.color = '#f44';
         }
+    },
+
+    async saveCookie() {
+        const input = document.getElementById('yuanbaoCookieInput');
+        if (!input) return;
+        const value = input.value;  // empty string is a valid request: it clears the runtime override.
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: this._authHeaders(),
+                body: JSON.stringify({ yuanbaoCookie: value }),
+            });
+            if (!res.ok) {
+                const payload = await res.json().catch(() => null);
+                const message = payload?.error || ('HTTP ' + res.status);
+                alert('保存失败: ' + message);
+                return;
+            }
+            alert('已保存。点击"重启服务"按钮生效。');
+        } catch (e) {
+            alert('保存失败: ' + e.message);
+        }
+    },
+
+    toggleCookieVisibility(visible) {
+        const input = document.getElementById('yuanbaoCookieInput');
+        if (!input) return;
+        input.classList.toggle('cookie-obscured', !visible);
     },
 
     copyEndpoint(btn, text) {

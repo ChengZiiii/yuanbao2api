@@ -10,6 +10,10 @@ func intPointer(n int) *int {
 	return &n
 }
 
+func stringPointer(s string) *string {
+	return &s
+}
+
 func TestSaveAndLoadRuntimeConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
@@ -122,5 +126,130 @@ func TestRuntimeConfigPath_DefaultVsOverride(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", custom)
 	if got := runtimeConfigPath(); got != custom {
 		t.Errorf("custom path: got %q, want %q", got, custom)
+	}
+}
+
+func TestSaveAndLoadRuntimeConfig_RoundTripYuanbaoCookie(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "runtime_config.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	cookie := "abc12345supersecret"
+	cfg := RuntimeConfig{
+		MaxConcurrency:      intPointer(5),
+		QueueTimeoutSeconds: intPointer(90),
+		RequestCooldownMs:   intPointer(250),
+		YuanbaoCookie:       stringPointer(cookie),
+	}
+	if err := SaveRuntimeConfig(cfg); err != nil {
+		t.Fatalf("SaveRuntimeConfig failed: %v", err)
+	}
+
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie == nil {
+		t.Fatalf("YuanbaoCookie: got nil, want %q", cookie)
+	}
+	if *loaded.YuanbaoCookie != cookie {
+		t.Errorf("YuanbaoCookie: got %q, want %q", *loaded.YuanbaoCookie, cookie)
+	}
+}
+
+func TestLoadRuntimeConfig_LegacyFileWithoutYuanbaoCookie(t *testing.T) {
+	// Simulate a runtime_config.json written before this feature existed.
+	// The "yuanbaoCookie" key is absent; deserialization must yield nil.
+	path := filepath.Join(t.TempDir(), "runtime_config.json")
+	legacy := []byte(`{"maxConcurrency":4,"queueTimeoutSeconds":60,"requestCooldownMs":100}`)
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatalf("failed to write legacy config: %v", err)
+	}
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie != nil {
+		t.Errorf("legacy file should yield nil YuanbaoCookie, got %q", *loaded.YuanbaoCookie)
+	}
+	if loaded.MaxConcurrency == nil || *loaded.MaxConcurrency != 4 {
+		t.Errorf("legacy file: MaxConcurrency not loaded correctly: %+v", loaded.MaxConcurrency)
+	}
+}
+
+func TestAtomicRename_TargetDoesNotExist(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "sub.tmp")
+	target := filepath.Join(dir, "sub.json")
+
+	want := []byte("hello-atomic")
+	if err := os.WriteFile(tmp, want, 0600); err != nil {
+		t.Fatalf("failed to seed tmp: %v", err)
+	}
+
+	if err := atomicRename(tmp, target); err != nil {
+		t.Fatalf("atomicRename returned error when target absent: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("target missing after rename: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("target content: got %q, want %q", got, want)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("tmp should not exist after successful rename, stat err=%v", err)
+	}
+}
+
+func TestAtomicRename_TargetExists(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "sub.tmp")
+	target := filepath.Join(dir, "sub.json")
+
+	oldContent := []byte(`{"maxConcurrency":1}`)
+	newContent := []byte(`{"maxConcurrency":7}`)
+
+	if err := os.WriteFile(target, oldContent, 0600); err != nil {
+		t.Fatalf("failed to seed target: %v", err)
+	}
+	if err := os.WriteFile(tmp, newContent, 0600); err != nil {
+		t.Fatalf("failed to seed tmp: %v", err)
+	}
+
+	if err := atomicRename(tmp, target); err != nil {
+		t.Fatalf("atomicRename returned error when target existed: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("target missing after rename: %v", err)
+	}
+	if string(got) != string(newContent) {
+		t.Errorf("target not replaced: got %q, want %q", got, newContent)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Errorf("tmp should not exist after successful rename, stat err=%v", err)
+	}
+}
+
+func TestAtomicRename_TmpMissing(t *testing.T) {
+	dir := t.TempDir()
+	tmp := filepath.Join(dir, "missing.tmp")
+	target := filepath.Join(dir, "missing.json")
+
+	// Pre-existing target whose contents MUST be preserved unchanged.
+	original := []byte(`{"maxConcurrency":2}`)
+	if err := os.WriteFile(target, original, 0600); err != nil {
+		t.Fatalf("failed to seed target: %v", err)
+	}
+
+	if err := atomicRename(tmp, target); err == nil {
+		t.Fatal("atomicRename should return non-nil error when tmp is absent")
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("target disappeared after failed rename: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("target changed after failed rename: got %q, want %q", got, original)
 	}
 }

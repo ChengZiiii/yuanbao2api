@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>元宝2API 管理面板</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* runtime-cookie: obscure the cookie textarea by default */
+        .cookie-obscured {
+            -webkit-text-security: disc;
+            text-security: disc;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -102,7 +109,7 @@
             <div class="section">
                 <div class="section-title">环境变量一览</div>
                 <table class="env-table" id="envTable">
-                    <tr><td>YUANBAO_COOKIE</td><td><span id="envCookie">加载中...</span> <span style="color:#555;font-size:11px;">（仅显示前 8 位）</span></td></tr>
+                    <tr><td>YUANBAO_COOKIE</td><td><span id="envCookie">加载中...</span> <span style="color:#555;font-size:11px;">（仅显示前 8 位）</span> <span id="cookieSource" style="color:#0a0;font-size:12px;margin-left:6px;"></span></td></tr>
                     <tr><td>YUANBAO_AGENT_ID</td><td id="envAgentId">-</td></tr>
                     <tr><td>API_KEY</td><td id="envApiKey">-</td></tr>
                     <tr><td>PORT</td><td id="envPort">-</td></tr>
@@ -119,6 +126,15 @@
                     <input type="text" id="agentIdInput" class="config-input" placeholder="naQivTmsDa">
                     <button class="btn-sm" onclick="App.saveAgentId()">保存</button>
                 </div>
+                <div class="config-row" style="align-items:flex-start;">
+                    <span class="config-label">YUANBAO_COOKIE:</span>
+                    <textarea id="yuanbaoCookieInput" rows="3" class="config-input cookie-obscured" style="width:360px;font-family:monospace;font-size:12px;" placeholder="从浏览器 DevTools 复制完整 Cookie" autocomplete="off"></textarea>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                        <label class="toggle-pill" style="font-size:12px;"><input type="checkbox" id="yuanbaoCookieVisibleToggle" onchange="App.toggleCookieVisibility(this.checked)"> 显示 Cookie</label>
+                        <button class="btn-sm" onclick="App.saveCookie()">保存 Cookie</button>
+                    </div>
+                </div>
+                <div style="color:#ffa500;font-size:12px;margin:8px 0;">⚠ 修改后需重启服务才能生效</div>
                 <div class="config-row">
                     <button class="btn-sm" onclick="App.checkCookie()">🔍 检测 Cookie</button>
                     <span id="cookieResult" style="font-size:13px;margin-left:12px;"></span>

@@ -34,7 +34,8 @@ func HandleEnv(c *gin.Context) {
 		cooldown = int(rl.Cooldown().Milliseconds())
 	}
 
-	cookie := os.Getenv("YUANBAO_COOKIE")
+	cookie := EffectiveYuanbaoCookie()
+	source := EffectiveYuanbaoCookieSource()
 	apiKey := os.Getenv("API_KEY")
 
 	c.JSON(http.StatusOK, gin.H{
@@ -45,6 +46,7 @@ func HandleEnv(c *gin.Context) {
 		"requestCooldownMs":   cooldown,
 		"yuanbaoAgentId":      getAgentID(),
 		"yuanbaoCookie":       maskCookie(cookie),
+		"cookieSource":        string(source),
 		"apiKey":              apiKey,
 	})
 }

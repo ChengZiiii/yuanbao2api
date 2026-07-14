@@ -24,6 +24,7 @@ func resetServerConfig() {
 		QueueTimeoutSeconds: 0,
 		RequestCooldownMs:   0,
 		AgentID:             "",
+		YuanbaoCookie:       nil,
 	}
 }
 
@@ -292,6 +293,186 @@ func TestHandleSetConfig_RejectsInvalidNumericValues(t *testing.T) {
 				t.Errorf("expected 400, got %d. body=%s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleSetConfig_SavesYuanbaoCookie(t *testing.T) {
+	resetServerConfig()
+	path := filepath.Join(t.TempDir(), "rc.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", &readCloser{data: `{"yuanbaoCookie":"abc12345supersecret"}`})
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	HandleSetConfig(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. body=%s", w.Code, w.Body.String())
+	}
+
+	cfg := GetServerConfig()
+	if cfg.YuanbaoCookie == nil || *cfg.YuanbaoCookie != "abc12345supersecret" {
+		t.Errorf("YuanbaoCookie: got %v, want %q", cfg.YuanbaoCookie, "abc12345supersecret")
+	}
+
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie == nil || *loaded.YuanbaoCookie != "abc12345supersecret" {
+		t.Errorf("persisted YuanbaoCookie: got %v, want %q", loaded.YuanbaoCookie, "abc12345supersecret")
+	}
+}
+
+func TestHandleSetConfig_EmptyYuanbaoCookieClearsRuntimeOverride(t *testing.T) {
+	resetServerConfig()
+	path := filepath.Join(t.TempDir(), "rc.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	// Seed a runtime cookie.
+	serverConfigLock.Lock()
+	existing := "preserved-cookie"
+	serverConfig.YuanbaoCookie = &existing
+	serverConfigLock.Unlock()
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", &readCloser{data: `{"yuanbaoCookie":""}`})
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	HandleSetConfig(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. body=%s", w.Code, w.Body.String())
+	}
+
+	cfg := GetServerConfig()
+	if cfg.YuanbaoCookie != nil {
+		t.Errorf("YuanbaoCookie: expected nil after clear, got %q", *cfg.YuanbaoCookie)
+	}
+
+	// Reload the persisted file: the YuanbaoCookie key must round-trip as
+	// nil. With the pointer+omitempty tag, that means the key is absent
+	// from the JSON.
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie != nil {
+		t.Errorf("persisted YuanbaoCookie: expected nil after clear, got %q", *loaded.YuanbaoCookie)
+	}
+
+	// EffectiveYuanbaoCookie should now fall back to env (or "" if unset).
+	os.Unsetenv("YUANBAO_COOKIE")
+	if got := EffectiveYuanbaoCookie(); got != "" {
+		t.Errorf("EffectiveYuanbaoCookie after clear: got %q, want \"\"", got)
+	}
+}
+
+func TestHandleSetConfig_OmittedYuanbaoCookieIsNoOp(t *testing.T) {
+	resetServerConfig()
+	path := filepath.Join(t.TempDir(), "rc.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	// Seed a runtime cookie both in memory and on disk.
+	seed := "do-not-touch"
+	if err := SaveRuntimeConfig(RuntimeConfig{YuanbaoCookie: &seed}); err != nil {
+		t.Fatalf("failed to seed runtime config: %v", err)
+	}
+	serverConfigLock.Lock()
+	serverConfig.YuanbaoCookie = &seed
+	serverConfigLock.Unlock()
+
+	// Sanity: the file actually has the seeded cookie.
+	if loaded := LoadRuntimeConfig(); loaded.YuanbaoCookie == nil || *loaded.YuanbaoCookie != seed {
+		t.Fatalf("seed failed: got %v", loaded.YuanbaoCookie)
+	}
+
+	// Request without yuanbaoCookie but with an unrelated change.
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", &readCloser{data: `{"deepThinking":true}`})
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	HandleSetConfig(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d. body=%s", w.Code, w.Body.String())
+	}
+
+	cfg := GetServerConfig()
+	if cfg.YuanbaoCookie == nil || *cfg.YuanbaoCookie != seed {
+		t.Errorf("YuanbaoCookie: expected preserved %q, got %v", seed, cfg.YuanbaoCookie)
+	}
+	if !cfg.DeepThinking {
+		t.Errorf("DeepThinking: expected true after partial update, got %v", cfg.DeepThinking)
+	}
+
+	// The spec scenario explicitly forbids rewriting the file in a way that
+	// would clear the cookie. Reload and confirm the cookie is still there.
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie == nil || *loaded.YuanbaoCookie != seed {
+		t.Errorf("persisted YuanbaoCookie: expected preserved %q, got %v", seed, loaded.YuanbaoCookie)
+	}
+}
+
+func TestHandleSetConfig_RejectsNonStringYuanbaoCookie(t *testing.T) {
+	resetServerConfig()
+	t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "rc.json"))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/config", &readCloser{data: `{"yuanbaoCookie":123}`})
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	HandleSetConfig(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d. body=%s", w.Code, w.Body.String())
+	}
+
+	cfg := GetServerConfig()
+	if cfg.YuanbaoCookie != nil {
+		t.Errorf("YuanbaoCookie should remain nil after rejected request, got %q", *cfg.YuanbaoCookie)
+	}
+}
+
+func TestEffectiveYuanbaoCookie_Priority(t *testing.T) {
+	resetServerConfig()
+	os.Unsetenv("YUANBAO_COOKIE")
+
+	// Neither: returns ""
+	if got := EffectiveYuanbaoCookie(); got != "" {
+		t.Errorf("neither set: got %q, want \"\"", got)
+	}
+	if got := EffectiveYuanbaoCookieSource(); got != CookieSourceNone {
+		t.Errorf("neither set source: got %q, want %q", got, CookieSourceNone)
+	}
+
+	// Env only.
+	t.Setenv("YUANBAO_COOKIE", "env-cookie")
+	if got := EffectiveYuanbaoCookie(); got != "env-cookie" {
+		t.Errorf("env only: got %q, want %q", got, "env-cookie")
+	}
+	if got := EffectiveYuanbaoCookieSource(); got != CookieSourceEnv {
+		t.Errorf("env only source: got %q, want %q", got, CookieSourceEnv)
+	}
+
+	// Runtime overrides env.
+	serverConfigLock.Lock()
+	rt := "runtime-cookie"
+	serverConfig.YuanbaoCookie = &rt
+	serverConfigLock.Unlock()
+	if got := EffectiveYuanbaoCookie(); got != "runtime-cookie" {
+		t.Errorf("runtime overrides env: got %q, want %q", got, "runtime-cookie")
+	}
+	if got := EffectiveYuanbaoCookieSource(); got != CookieSourceRuntime {
+		t.Errorf("runtime overrides env source: got %q, want %q", got, CookieSourceRuntime)
+	}
+
+	// Empty runtime falls back to env.
+	serverConfigLock.Lock()
+	empty := ""
+	serverConfig.YuanbaoCookie = &empty
+	serverConfigLock.Unlock()
+	if got := EffectiveYuanbaoCookie(); got != "env-cookie" {
+		t.Errorf("empty runtime falls back: got %q, want %q", got, "env-cookie")
 	}
 }
 
