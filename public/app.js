@@ -221,6 +221,8 @@ const App = {
                 const labelMap = { runtime: '🟢 runtime', env: '🟡 env', none: '⚪ none' };
                 sourceEl.textContent = '[' + (labelMap[source] || source) + ']';
             }
+            document.getElementById('envHyToken').textContent = data.yuanbaoHyToken || '-';
+            document.getElementById('envHyUser').textContent = data.yuanbaoHyUser || '-';
             document.getElementById('envAgentId').textContent = data.yuanbaoAgentId || '-';
             document.getElementById('envApiKey').textContent = data.apiKey ? data.apiKey.substring(0, 8) + '****' : '-';
             document.getElementById('envPort').textContent = data.port || '-';
@@ -228,6 +230,13 @@ const App = {
             document.getElementById('envMaxC').textContent = data.maxConcurrency ?? '-';
             document.getElementById('envQTimeout').textContent = data.queueTimeoutSeconds ?? '-';
             document.getElementById('envCooldown').textContent = (data.requestCooldownMs ?? '-') + 'ms';
+
+            // Prefill the runtime-cookie inputs with the masked halves so
+            // operators can edit a single field without clearing the other.
+            const tokenInput = document.getElementById('yuanbaoHyTokenInput');
+            const userInput = document.getElementById('yuanbaoHyUserInput');
+            if (tokenInput) tokenInput.placeholder = data.yuanbaoHyToken && data.yuanbaoHyToken !== '-' ? data.yuanbaoHyToken : 'hy_token 的值';
+            if (userInput) userInput.placeholder = data.yuanbaoHyUser && data.yuanbaoHyUser !== '-' ? data.yuanbaoHyUser : 'hy_user 的值';
         } catch(e) {}
     },
 
@@ -277,14 +286,16 @@ const App = {
     },
 
     async saveCookie() {
-        const input = document.getElementById('yuanbaoCookieInput');
-        if (!input) return;
-        const value = input.value;  // empty string is a valid request: it clears the runtime override.
+        const tokenInput = document.getElementById('yuanbaoHyTokenInput');
+        const userInput = document.getElementById('yuanbaoHyUserInput');
+        if (!tokenInput || !userInput) return;
+        const hyToken = tokenInput.value;
+        const hyUser = userInput.value;
         try {
             const res = await fetch('/api/config', {
                 method: 'POST',
                 headers: this._authHeaders(),
-                body: JSON.stringify({ yuanbaoCookie: value }),
+                body: JSON.stringify({ yuanbaoCookie: { hyToken, hyUser } }),
             });
             if (!res.ok) {
                 const payload = await res.json().catch(() => null);
@@ -299,9 +310,11 @@ const App = {
     },
 
     toggleCookieVisibility(visible) {
-        const input = document.getElementById('yuanbaoCookieInput');
-        if (!input) return;
-        input.classList.toggle('cookie-obscured', !visible);
+        const tokenInput = document.getElementById('yuanbaoHyTokenInput');
+        const userInput = document.getElementById('yuanbaoHyUserInput');
+        const nextType = visible ? 'text' : 'password';
+        if (tokenInput) tokenInput.type = nextType;
+        if (userInput) userInput.type = nextType;
     },
 
     copyEndpoint(btn, text) {

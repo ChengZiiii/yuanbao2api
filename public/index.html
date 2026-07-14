@@ -109,7 +109,7 @@
             <div class="section">
                 <div class="section-title">环境变量一览</div>
                 <table class="env-table" id="envTable">
-                    <tr><td>YUANBAO_COOKIE</td><td><span id="envCookie">加载中...</span> <span style="color:#555;font-size:11px;">（仅显示前 8 位）</span> <span id="cookieSource" style="color:#0a0;font-size:12px;margin-left:6px;"></span></td></tr>
+                    <tr><td>YUANBAO_COOKIE</td><td><span id="envCookie">加载中...</span> <span style="color:#555;font-size:11px;">（仅显示前 8 位）</span> <span id="cookieSource" style="color:#0a0;font-size:12px;margin-left:6px;"></span><br><span style="color:#888;font-size:11px;">hy_token:</span> <span id="envHyToken" style="font-family:monospace;font-size:12px;">-</span> <span style="color:#888;font-size:11px;margin-left:12px;">hy_user:</span> <span id="envHyUser" style="font-family:monospace;font-size:12px;">-</span></td></tr>
                     <tr><td>YUANBAO_AGENT_ID</td><td id="envAgentId">-</td></tr>
                     <tr><td>API_KEY</td><td id="envApiKey">-</td></tr>
                     <tr><td>PORT</td><td id="envPort">-</td></tr>
@@ -128,7 +128,11 @@
                 </div>
                 <div class="config-row" style="align-items:flex-start;">
                     <span class="config-label">YUANBAO_COOKIE:</span>
-                    <textarea id="yuanbaoCookieInput" rows="3" class="config-input cookie-obscured" style="width:360px;font-family:monospace;font-size:12px;" placeholder="从浏览器 DevTools 复制完整 Cookie" autocomplete="off"></textarea>
+                    <div style="display:flex;flex-direction:column;gap:6px;">
+                        <div style="font-size:12px;color:#888;">Cookie 由 <code>hy_token</code> 与 <code>hy_user</code> 两部分组成，请分别在两个输入框粘贴对应的值。</div>
+                        <input type="password" id="yuanbaoHyTokenInput" class="config-input" style="width:360px;font-family:monospace;font-size:12px;" placeholder="hy_token 的值" autocomplete="off">
+                        <input type="password" id="yuanbaoHyUserInput" class="config-input" style="width:360px;font-family:monospace;font-size:12px;" placeholder="hy_user 的值" autocomplete="off">
+                    </div>
                     <div style="display:flex;flex-direction:column;gap:6px;">
                         <label class="toggle-pill" style="font-size:12px;"><input type="checkbox" id="yuanbaoCookieVisibleToggle" onchange="App.toggleCookieVisibility(this.checked)"> 显示 Cookie</label>
                         <button class="btn-sm" onclick="App.saveCookie()">保存 Cookie</button>
