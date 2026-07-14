@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,13 @@ func intPointer(n int) *int {
 
 func stringPointer(s string) *string {
 	return &s
+}
+
+// cookiePointer builds a *YuanbaoCookie for tests that previously used
+// *string. Centralised here so test cases do not have to repeat the
+// struct literal every time.
+func cookiePointer(hyToken, hyUser string) *YuanbaoCookie {
+	return &YuanbaoCookie{HyToken: hyToken, HyUser: hyUser}
 }
 
 func TestSaveAndLoadRuntimeConfig(t *testing.T) {
@@ -134,12 +142,12 @@ func TestSaveAndLoadRuntimeConfig_RoundTripYuanbaoCookie(t *testing.T) {
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
-	cookie := "abc12345supersecret"
+	cookie := cookiePointer("abc12345supersecret", "user-xyz")
 	cfg := RuntimeConfig{
 		MaxConcurrency:      intPointer(5),
 		QueueTimeoutSeconds: intPointer(90),
 		RequestCooldownMs:   intPointer(250),
-		YuanbaoCookie:       stringPointer(cookie),
+		YuanbaoCookie:       cookie,
 	}
 	if err := SaveRuntimeConfig(cfg); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
@@ -147,10 +155,65 @@ func TestSaveAndLoadRuntimeConfig_RoundTripYuanbaoCookie(t *testing.T) {
 
 	loaded := LoadRuntimeConfig()
 	if loaded.YuanbaoCookie == nil {
-		t.Fatalf("YuanbaoCookie: got nil, want %q", cookie)
+		t.Fatalf("YuanbaoCookie: got nil, want %+v", cookie)
 	}
-	if *loaded.YuanbaoCookie != cookie {
-		t.Errorf("YuanbaoCookie: got %q, want %q", *loaded.YuanbaoCookie, cookie)
+	if loaded.YuanbaoCookie.HyToken != "abc12345supersecret" || loaded.YuanbaoCookie.HyUser != "user-xyz" {
+		t.Errorf("YuanbaoCookie: got %+v, want %+v", loaded.YuanbaoCookie, cookie)
+	}
+
+	// The on-disk JSON must contain the canonical object form. Match
+	// keys/values tolerantly because MarshalIndent inserts a space after
+	// each colon.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"hyToken"`)) ||
+		!bytes.Contains(raw, []byte(`"abc12345supersecret"`)) ||
+		!bytes.Contains(raw, []byte(`"hyUser"`)) ||
+		!bytes.Contains(raw, []byte(`"user-xyz"`)) {
+		t.Errorf("persisted JSON missing expected fields: %s", raw)
+	}
+}
+
+func TestLoadRuntimeConfig_LegacyYuanbaoCookieString(t *testing.T) {
+	// Simulate a runtime_config.json written during the runtime-cookie
+	// transition where yuanbaoCookie was stored as a flat string.
+	path := filepath.Join(t.TempDir(), "runtime_config.json")
+	legacy := []byte(`{"yuanbaoCookie":"hy_token=legacy; hy_user=old"}`)
+	if err := os.WriteFile(path, legacy, 0600); err != nil {
+		t.Fatalf("failed to write legacy config: %v", err)
+	}
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie == nil {
+		t.Fatalf("YuanbaoCookie should have been parsed from legacy string, got nil")
+	}
+	if loaded.YuanbaoCookie.HyToken != "legacy" {
+		t.Errorf("HyToken: got %q, want %q", loaded.YuanbaoCookie.HyToken, "legacy")
+	}
+	if loaded.YuanbaoCookie.HyUser != "old" {
+		t.Errorf("HyUser: got %q, want %q", loaded.YuanbaoCookie.HyUser, "old")
+	}
+}
+
+func TestLoadRuntimeConfig_ObjectYuanbaoCookie(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "runtime_config.json")
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	original := cookiePointer("obj-token", "obj-user")
+	if err := SaveRuntimeConfig(RuntimeConfig{YuanbaoCookie: original}); err != nil {
+		t.Fatalf("SaveRuntimeConfig failed: %v", err)
+	}
+
+	loaded := LoadRuntimeConfig()
+	if loaded.YuanbaoCookie == nil {
+		t.Fatalf("YuanbaoCookie: got nil after object round-trip")
+	}
+	if loaded.YuanbaoCookie.HyToken != "obj-token" || loaded.YuanbaoCookie.HyUser != "obj-user" {
+		t.Errorf("YuanbaoCookie: got %+v, want %+v", loaded.YuanbaoCookie, original)
 	}
 }
 
