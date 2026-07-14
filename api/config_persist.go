@@ -5,16 +5,89 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"strings"
 	"time"
 )
+
+// YuanbaoCookie holds the two halves of a Yuanbao session cookie.
+// HeaderValue assembles them in the "hy_token=...; hy_user=..." order
+// expected by the upstream Yuanbao service.
+type YuanbaoCookie struct {
+	HyToken string `json:"hyToken"`
+	HyUser  string `json:"hyUser"`
+}
+
+// UnmarshalJSON accepts both the canonical object form and the legacy
+// string form ("hy_token=xxx; hy_user=yyy") produced by an earlier
+// runtime-cookie version of the panel. The legacy form is only used to
+// migrate existing runtime_config.json files; new writes always go
+// through the object form.
+func (c *YuanbaoCookie) UnmarshalJSON(data []byte) error {
+	// 1) Try the canonical object form first.
+	type alias YuanbaoCookie
+	var s alias
+	if err := json.Unmarshal(data, &s); err == nil {
+		*c = YuanbaoCookie(s)
+		return nil
+	}
+	// 2) Fall back to the legacy string form.
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	return c.parseLegacyString(str)
+}
+
+// parseLegacyString parses "hy_token=xxx; hy_user=yyy" into the
+// struct fields. Unknown keys are ignored; pairs missing '=' are
+// skipped. The parser is intentionally lenient so that a stray space
+// or a trailing semicolon does not break loading.
+func (c *YuanbaoCookie) parseLegacyString(s string) error {
+	for _, pair := range strings.Split(s, ";") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		idx := strings.Index(pair, "=")
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(pair[:idx])
+		val := strings.TrimSpace(pair[idx+1:])
+		switch key {
+		case "hy_token":
+			c.HyToken = val
+		case "hy_user":
+			c.HyUser = val
+		}
+	}
+	return nil
+}
+
+// HeaderValue assembles the Cookie header for upstream requests.
+// Empty fields are omitted; if both fields are empty the result is "".
+// A nil receiver is treated as "empty" and returns "".
+func (c *YuanbaoCookie) HeaderValue() string {
+	if c == nil {
+		return ""
+	}
+	var parts []string
+	if c.HyToken != "" {
+		parts = append(parts, "hy_token="+c.HyToken)
+	}
+	if c.HyUser != "" {
+		parts = append(parts, "hy_user="+c.HyUser)
+	}
+	return strings.Join(parts, "; ")
+}
 
 // RuntimeConfig holds runtime-persisted shared server configuration. Values
 // here override env-derived defaults at startup and survive service restarts.
 type RuntimeConfig struct {
-	MaxConcurrency      *int    `json:"maxConcurrency,omitempty"`
-	QueueTimeoutSeconds *int    `json:"queueTimeoutSeconds,omitempty"`
-	RequestCooldownMs   *int    `json:"requestCooldownMs,omitempty"`
-	YuanbaoCookie       *string `json:"yuanbaoCookie,omitempty"`
+	MaxConcurrency      *int           `json:"maxConcurrency,omitempty"`
+	QueueTimeoutSeconds *int           `json:"queueTimeoutSeconds,omitempty"`
+	RequestCooldownMs   *int           `json:"requestCooldownMs,omitempty"`
+	YuanbaoCookie       *YuanbaoCookie `json:"yuanbaoCookie,omitempty"`
 }
 
 // runtimeConfigPath returns the file path used to persist RuntimeConfig. The
