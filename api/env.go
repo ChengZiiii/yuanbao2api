@@ -38,6 +38,29 @@ func HandleEnv(c *gin.Context) {
 	source := EffectiveYuanbaoCookieSource()
 	apiKey := os.Getenv("API_KEY")
 
+	// Per-component masks mirror the assembled cookie so the panel can show
+	// each half independently. Each value is "" when the corresponding half
+	// is empty.
+	var hyToken, hyUser string
+	serverConfigLock.RLock()
+	yc := serverConfig.YuanbaoCookie
+	serverConfigLock.RUnlock()
+	if yc != nil {
+		hyToken = yc.HyToken
+		hyUser = yc.HyUser
+	}
+	// When runtime override is not providing a value, fall back to the env
+	// string so the masks at least reflect what would actually be sent.
+	if hyToken == "" && hyUser == "" {
+		if env := os.Getenv("YUANBAO_COOKIE"); env != "" {
+			parsed := &YuanbaoCookie{}
+			if err := parsed.parseLegacyString(env); err == nil {
+				hyToken = parsed.HyToken
+				hyUser = parsed.HyUser
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"port":                os.Getenv("PORT"),
 		"ginMode":             os.Getenv("GIN_MODE"),
@@ -46,6 +69,8 @@ func HandleEnv(c *gin.Context) {
 		"requestCooldownMs":   cooldown,
 		"yuanbaoAgentId":      getAgentID(),
 		"yuanbaoCookie":       maskCookie(cookie),
+		"yuanbaoHyToken":      maskCookie(hyToken),
+		"yuanbaoHyUser":       maskCookie(hyUser),
 		"cookieSource":        string(source),
 		"apiKey":              apiKey,
 	})
