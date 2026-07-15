@@ -116,13 +116,14 @@ checkbox。
 
 ## 9. /v1/models 升级
 
-- [ ] 9.1 `api/models.go` 的 `HandleOpenAIModels` 改为遍历
+- [x] 9.1 `api/models.go` 的 `HandleOpenAIModels` 改为遍历
       `provider.Registry().All()`；仅输出 `enabled` provider 的 `Models()`。
-- [ ] 9.2 每个 ModelInfo 的 `ownedBy` 字段由 provider 提供（已在
+- [x] 9.2 每个 ModelInfo 的 `ownedBy` 字段由 provider 提供（已在
       `provider.ModelInfo` 内）。
 - [ ] 9.3 删除 `MODEL_MAPPING` / `GetModelConfig` / `buildYuanbaoRequest`
-      （已迁到 yuanbao provider 包内）。
-- [ ] 9.4 单元测试 `TestHandleOpenAIModels_*`：单 provider、多 provider
+      （已迁到 yuanbao provider 包内）。 // 推迟到 section 10 与 handler
+      改造一起做，避免破坏 openai.go / anthropic.go 的当前 build。
+- [x] 9.4 单元测试 `TestHandleOpenAIModels_*`：单 provider、多 provider
       并集、停用 provider 过滤、占位 provider 在停用时不出现在响应。
 
 ## 10. Handler 改走 Registry

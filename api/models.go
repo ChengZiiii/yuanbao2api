@@ -6,15 +6,65 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
 	"yuanbao2api/internal/models"
+	providers "yuanbao2api/providers"
 	"yuanbao2api/yuanbao"
 )
 
-// HandleOpenAIModels returns the list of available models
+// enabled reports whether the given provider has enabled=true in the
+// persisted runtime config. Defaults to true when the entry is absent
+// (legacy single-provider deployments) so the panel does not see an
+// empty model list after upgrading.
+func providerEnabled(name string) bool {
+	serverConfigLock.RLock()
+	defer serverConfigLock.RUnlock()
+	if serverConfig.Providers == nil {
+		return true
+	}
+	p, ok := serverConfig.Providers[name]
+	if !ok {
+		return true
+	}
+	if p.Enabled == nil {
+		return true
+	}
+	return *p.Enabled
+}
+
+// HandleOpenAIModels returns the union of every enabled provider's
+// Models() output. Each provider contributes its own ModelInfo list
+// (already wrapped in the OpenAI-compatible shape by the provider
+// adapter); the handler adds the standard object/created/permission/
+// root/parent fields and the per-model owned_by = provider name.
 func HandleOpenAIModels(c *gin.Context) {
-	c.JSON(http.StatusOK, models.ModelsResponse{
-		Object: "list",
-		Data: []models.ModelInfo{
+	var entries []models.ModelInfo
+
+	if reg := activeRegistry; reg != nil {
+		for _, p := range reg.All() {
+			if !providerEnabled(p.Name()) {
+				continue
+			}
+			for _, m := range p.Models() {
+				entries = append(entries, models.ModelInfo{
+					ID:          m.ID,
+					Object:      "model",
+					Created:     1704067200,
+					OwnedBy:     p.Name(),
+					Permission:  []interface{}{},
+					Root:        m.ID,
+					Parent:      nil,
+					Description: m.Description,
+				})
+			}
+		}
+	}
+
+	if entries == nil {
+		// Fall back to a minimal yuanbao-only list when no registry
+		// is wired (e.g. unit tests before main.go boots) so the
+		// endpoint still returns the canonical OpenAI shape.
+		entries = []models.ModelInfo{
 			{
 				ID:          "deep_seek_v3",
 				Object:      "model",
@@ -35,11 +85,34 @@ func HandleOpenAIModels(c *gin.Context) {
 				Parent:      nil,
 				Description: "Hy3 preview - 腾讯混元大模型，全能处理",
 			},
-		},
+		}
+	}
+
+	c.JSON(http.StatusOK, models.ModelsResponse{
+		Object: "list",
+		Data:   entries,
 	})
 }
 
-// ModelConfig holds the mapping configuration for a model
+// activeRegistry is the registry singleton exposed by main.go via
+// SetProviderRegistry. When nil, HandleOpenAIModels falls back to
+// the hard-coded yuanbao list above.
+var activeRegistry *providers.Registry
+
+// SetProviderRegistry wires the live provider.Registry into the
+// handler. Called once from main.go at startup. Passing nil resets
+// the handler to its static fallback.
+func SetProviderRegistry(reg *providers.Registry) {
+	activeRegistry = reg
+}
+
+// ---- Backwards-compat shims for the legacy handler code path. ----
+// These remain in place until section 10 swaps openai.go / anthropic.go
+// to use the provider.Registry directly. They are NOT used by the new
+// HandleOpenAIModels implementation above.
+
+// ModelConfig holds the mapping configuration for a model (legacy
+// shim). The yuanbao provider now owns this knowledge internally.
 type ModelConfig struct {
 	ChatModelID string
 	Model       string
@@ -47,7 +120,9 @@ type ModelConfig struct {
 	Description string
 }
 
-// MODEL_MAPPING maps model names to their Yuanbao configuration
+// MODEL_MAPPING mirrors the old yuanbao-only model map. Kept so the
+// legacy GetModelConfig / buildYuanbaoRequest paths continue to
+// resolve the same chatModelID values.
 var MODEL_MAPPING = map[string]ModelConfig{
 	"DeepSeek-V3.2": {
 		ChatModelID: "deep_seek_v3",
@@ -87,7 +162,7 @@ var MODEL_MAPPING = map[string]ModelConfig{
 	},
 }
 
-// GetModelConfig returns the model configuration for a given model name
+// GetModelConfig returns the model configuration for a given model name.
 func GetModelConfig(modelName string) ModelConfig {
 	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(modelName, "-", ""), "_", ""))
 
@@ -105,8 +180,11 @@ func GetModelConfig(modelName string) ModelConfig {
 	return MODEL_MAPPING["DeepSeek-V3.2"]
 }
 
-// buildYuanbaoRequest builds the Yuanbao API request from parameters
-func buildYuanbaoRequest(prompt string, modelConfig ModelConfig, useDeepThinking bool, useInternetSearch bool, agentID string) YuanbaoRequest {
+// buildYuanbaoRequest builds the Yuanbao API request from parameters.
+// Retained as a back-compat shim for the legacy handler code path;
+// the new handler code (section 10) calls providers/yuanbao.BuildRequest
+// directly.
+func buildYuanbaoRequest(prompt string, modelConfig ModelConfig, useDeepThinking bool, useInternetSearch bool, agentID string) yuanbao.YuanbaoRequest {
 	supportFunctions := []string{}
 	if useInternetSearch {
 		supportFunctions = append(supportFunctions, "openInternetSearch")
@@ -153,7 +231,7 @@ func buildYuanbaoRequest(prompt string, modelConfig ModelConfig, useDeepThinking
 		},
 	})
 
-	return YuanbaoRequest{
+	return yuanbao.YuanbaoRequest{
 		Model:             modelConfig.Model,
 		Prompt:            prompt,
 		Plugin:            plugin,
@@ -184,5 +262,5 @@ func buildYuanbaoRequest(prompt string, modelConfig ModelConfig, useDeepThinking
 	}
 }
 
-// YuanbaoRequest aliases the yuanbao package's YuanbaoRequest type
+// YuanbaoRequest aliases the yuanbao package's YuanbaoRequest type.
 type YuanbaoRequest = yuanbao.YuanbaoRequest
