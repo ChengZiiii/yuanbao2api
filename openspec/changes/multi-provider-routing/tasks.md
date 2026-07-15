@@ -38,16 +38,16 @@ checkbox。
 
 ## 3. qwen / kimi 占位
 
-- [ ] 3.1 新增 `providers/qwen/client.go`：最小 `Client` 结构（`BaseURL`、
+- [x] 3.1 新增 `providers/qwen/client.go`：最小 `Client` 结构（`BaseURL`、
       `Headers` 占位即可，无需实现）。
-- [ ] 3.2 新增 `providers/qwen/provider.go`：`Name = "qwen"`；
+- [x] 3.2 新增 `providers/qwen/provider.go`：`Name = "qwen"`；
       `Models()` 含 `qwen-max`、`qwen-plus`、`qwen-turbo`、`qwen-long`；
       `BuildPrompt` / `NewRequest` / `Send` 全部返回
       `"qwen provider is not yet implemented"` 错误；
       `ParseStreamLine` 返回 `(nil, nil)`。
-- [ ] 3.3 单元测试 `TestQwenProvider_NotImplemented`：每个方法各跑一次
+- [x] 3.3 单元测试 `TestQwenProvider_NotImplemented`：每个方法各跑一次
       确认返回预期 error / nil。
-- [ ] 3.4 新增 `providers/kimi/client.go` / `provider.go` / `provider_test.go`：
+- [x] 3.4 新增 `providers/kimi/client.go` / `provider.go` / `provider_test.go`：
       `Name = "kimi"`；`Models()` 含 `kimi-k2`、`moonshot-v1-128k`；
       行为同 qwen。
 
