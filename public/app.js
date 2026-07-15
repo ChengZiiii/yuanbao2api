@@ -321,6 +321,98 @@ const App = {
         }
     },
 
+    /**
+     * Lenient legacy parser. Returns { hyToken, hyUser } extracted from any
+     * composite "hy_token=...; hy_user=..." form found in the inputs.
+     * Returns null if no composite was found (caller keeps the raw values).
+     * Restored after accidentally being dropped in 076d381; called from
+     * saveCookie() and fillFromFullCookie().
+     */
+    _extractLegacyParts(rawValues) {
+        let hyToken = null, hyUser = null;
+        for (const raw of rawValues) {
+            if (!raw || raw.indexOf('=') < 0) continue;
+            // Only treat as legacy composite if it explicitly uses `hy_token=` or `hy_user=`.
+            // A bare token (base64 with no '=' connection) won't match.
+            if (!/hy_token\s*=|hy_user\s*=/.test(raw)) continue;
+            for (const pair of raw.split(/[;\n]/)) {
+                const idx = pair.indexOf('=');
+                if (idx <= 0) continue;
+                const k = pair.slice(0, idx).trim();
+                const v = pair.slice(idx + 1).trim();
+                if (k === 'hy_token' && v) hyToken = v;
+                else if (k === 'hy_user' && v) hyUser = v;
+            }
+            if (hyToken || hyUser) break;
+        }
+        if (!hyToken && !hyUser) return null;
+        return { hyToken: hyToken || '', hyUser: hyUser || '' };
+    },
+
+    /**
+     * Called by the onpaste handler of the "paste full cookie" helper input.
+     * Splits the composite form into the two component inputs and clears
+     * itself. The caller still has to click "保存 Cookie" to persist.
+     * Restored after accidentally being dropped in 076d381; bound via
+     * index.html onpaste="setTimeout(()=>App.fillFromFullCookie(), 0)".
+     */
+    fillFromFullCookie() {
+        const full = document.getElementById('yuanbaoFullCookieInput');
+        const tk = document.getElementById('yuanbaoHyTokenInput');
+        const us = document.getElementById('yuanbaoHyUserInput');
+        if (!full || !tk || !us) return;
+        const legacy = this._extractLegacyParts([full.value]);
+        if (!legacy) {
+            alert('没识别到 hy_token / hy_user 键。请把 DevTools 中完整的 cookie 头整段粘到这里。');
+            return;
+        }
+        tk.value = legacy.hyToken;
+        us.value = legacy.hyUser;
+        full.value = '';
+        alert('已自动拆分：hy_token (长串) → 上框；hy_user (短 id) → 下框。检查后点「保存 Cookie」。');
+    },
+
+    toggleCookieVisibility(visible) {
+        const tokenInput = document.getElementById('yuanbaoHyTokenInput');
+        const userInput = document.getElementById('yuanbaoHyUserInput');
+        const fullInput = document.getElementById('yuanbaoFullCookieInput');
+        const nextType = visible ? 'text' : 'password';
+        if (tokenInput) tokenInput.type = nextType;
+        if (userInput) userInput.type = nextType;
+        if (fullInput) fullInput.type = nextType;
+    },
+
+    copyEndpoint(btn, text) {
+        navigator.clipboard.writeText(text).then(() => {
+            btn.textContent = '✅';
+            setTimeout(() => btn.textContent = '📋', 1500);
+        }).catch(() => {
+            // Fallback for non-HTTPS
+            const input = btn.previousElementSibling;
+            if (input && input.select) {
+                input.select();
+                document.execCommand('copy');
+            }
+        });
+    },
+
+    async loadLogs() {
+        try {
+            const res = await fetch('/api/logs');
+            const logs = await res.json();
+            const tbody = document.getElementById('logBody');
+            if (!tbody) return;
+            if (!logs || logs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="color:#666;text-align:center;">暂无数据</td></tr>';
+                return;
+            }
+            tbody.innerHTML = logs.map(log => {
+                const cls = log.status >= 400 ? 'status-bad' : log.status >= 300 ? 'status-warn' : 'status-ok';
+                return '<tr><td>' + (log.time || '') + '</td><td><span class="method-tag">' + (log.method || '') + '</span></td><td>' + (log.model || '-') + '</td><td><span class="' + cls + '">' + (log.status || '') + '</span></td><td>' + (log.duration || '') + '</td><td style="color:#666;">' + (log.note || '') + '</td></tr>';
+            }).join('');
+        } catch(e) {}
+    },
+
     async saveConcurrency() {
         const maxCRaw = document.getElementById('maxConcurrencyInput').value;
         const qTimeoutRaw = document.getElementById('queueTimeoutInput').value;
