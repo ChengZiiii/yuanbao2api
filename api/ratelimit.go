@@ -70,10 +70,16 @@ func InitRateLimiter() *RateLimiter {
 	}
 
 	// Surface the resolved values on the server config for visibility.
+	// Persisted Yuanbao cookie is also restored to the in-memory slot so it
+	// survives process restarts (mirrors SyncAgentID for AGENT_ID). The env
+	// var remains a fallback for the empty / absent on-disk case.
 	serverConfigLock.Lock()
 	serverConfig.MaxConcurrency = maxC
 	serverConfig.QueueTimeoutSeconds = int(qTimeout.Seconds())
 	serverConfig.RequestCooldownMs = int(cooldown.Milliseconds())
+	if rc.YuanbaoCookie != nil {
+		serverConfig.YuanbaoCookie = rc.YuanbaoCookie
+	}
 	serverConfigLock.Unlock()
 
 	return globalRateLimiter
