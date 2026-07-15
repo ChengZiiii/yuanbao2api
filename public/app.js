@@ -248,7 +248,7 @@ const App = {
             await fetch('/api/config', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ agentId: input.value.trim() })
+                body: JSON.stringify({ providers: { yuanbao: { agentId: input.value.trim() } } })
             });
             alert('Agent ID 已更新');
         } catch(e) {
@@ -306,7 +306,7 @@ const App = {
             const res = await fetch('/api/config', {
                 method: 'POST',
                 headers: this._authHeaders(),
-                body: JSON.stringify({ yuanbaoCookie: { hyToken, hyUser } }),
+                body: JSON.stringify({ providers: { yuanbao: { cookie: { hyToken, hyUser } } } }),
             });
             if (!res.ok) {
                 const payload = await res.json().catch(() => null);
@@ -440,9 +440,13 @@ const App = {
                 method: 'POST',
                 headers: this._authHeaders(),
                 body: JSON.stringify({
-                    maxConcurrency: maxC,
-                    queueTimeoutSeconds: qTimeout,
-                    requestCooldownMs: cooldown,
+                    providers: {
+                        yuanbao: {
+                            maxConcurrency: maxC,
+                            queueTimeoutSeconds: qTimeout,
+                            requestCooldownMs: cooldown,
+                        },
+                    },
                 }),
             });
             if (!res.ok) {

@@ -166,14 +166,14 @@ checkbox。
 
 ## 13. 旧"配置" tab 适配新形态
 
-- [ ] 13.1 `public/app.js` 的 `saveAgentId`：POST
+- [x] 13.1 `public/app.js` 的 `saveAgentId`：POST
       `{ providers: { yuanbao: { agentId } } }`。
-- [ ] 13.2 `public/app.js` 的 `saveCookie`：POST
+- [x] 13.2 `public/app.js` 的 `saveCookie`：POST
       `{ providers: { yuanbao: { cookie: {...} } } }`。
-- [ ] 13.3 `public/app.js` 的 `saveConcurrency`：POST
+- [x] 13.3 `public/app.js` 的 `saveConcurrency`：POST
       `{ providers: { yuanbao: { maxConcurrency, queueTimeoutSeconds,
       requestCooldownMs } } }`。
-- [ ] 13.4 在旧"配置" tab 顶部加一行小字："推荐使用'站点管理' tab
+- [x] 13.4 在旧"配置" tab 顶部加一行小字："推荐使用'站点管理' tab
       进行多 provider 配置"。
 
 ## 14. 端到端验证
