@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"yuanbao2api/yuanbao"
@@ -286,6 +287,17 @@ func HandleSetConfig(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist runtime config: " + err.Error()})
 			return
 		}
+		// All four fields that flip `changed = true` (YuanbaoCookie +
+		// the three rate-limit knobs) only take effect on the next
+		// process start. Save → exit so the operator does not have to
+		// click the separate Restart button. The process is expected
+		// to be wrapped by restart.bat (or any supervisor) which will
+		// respawn it within a second. The 200 response flushes first.
+		log.Println("检测到运行时配置已变更，500ms 后自动重启以使新配置生效")
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			exitFn(0)
+		}()
 	}
 
 	c.JSON(http.StatusOK, serverConfig)

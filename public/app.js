@@ -303,7 +303,10 @@ const App = {
                 alert('保存失败: ' + message);
                 return;
             }
-            alert('已保存。点击"重启服务"按钮生效。');
+            alert('已保存，服务将自动重启，页面将在几秒后刷新...');
+            // 服务会在保存后约 500ms 自动重启（restart.bat / 进程管理器会拉起新进程），
+            // 这里开始轮询 /health 直到服务恢复，然后整页 reload，以便 /api/env 显示最新 cookieSource。
+            this._pollUntilReadyAndReload();
         } catch (e) {
             alert('保存失败: ' + e.message);
         }
@@ -385,10 +388,28 @@ const App = {
                 alert('保存失败: ' + message);
                 return;
             }
-            alert('已保存。点击"重启服务"按钮生效。');
+            alert('已保存，服务将自动重启，页面将在几秒后刷新...');
+            // 服务会在保存后约 500ms 自动重启（restart.bat / 进程管理器会拉起新进程），
+            // 这里开始轮询 /health 直到服务恢复，然后整页 reload，以便 /api/env 显示最新 cookieSource。
+            this._pollUntilReadyAndReload();
         } catch (e) {
             alert('保存失败: ' + e.message);
         }
+    },
+
+    async _pollUntilReadyAndReload() {
+        // Service was auto-restarted after saveCookie / saveConcurrency.
+        // Wait for /health to come back, then full-reload so /api/env
+        // displays the new runtime values (cookieSource etc.).
+        const deadline = Date.now() + 15000;
+        while (Date.now() < deadline) {
+            try {
+                const r = await fetch('/health', { cache: 'no-store' });
+                if (r.ok) { window.location.reload(); return; }
+            } catch (_) { /* connection refused while restarting */ }
+            await new Promise(r => setTimeout(r, 400));
+        }
+        alert('服务重启超时，请手动刷新页面');
     },
 
     async restartService() {
