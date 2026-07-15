@@ -8,6 +8,10 @@ import (
 	"github.com/joho/godotenv"
 
 	"yuanbao2api/api"
+	providers "yuanbao2api/providers"
+	"yuanbao2api/providers/kimi"
+	"yuanbao2api/providers/qwen"
+	yuanbaoProvider "yuanbao2api/providers/yuanbao"
 )
 
 func setupRouter() *gin.Engine {
@@ -93,6 +97,22 @@ func main() {
 	if port == "" {
 		port = "3000"
 	}
+
+	// Wire the provider registry. Order matters: register all
+	// providers before SetDefault so the default can resolve.
+	if err := providers.Global().Register(yuanbaoProvider.New()); err != nil {
+		log.Fatalf("failed to register yuanbao provider: %v", err)
+	}
+	if err := providers.Global().Register(qwen.New()); err != nil {
+		log.Fatalf("failed to register qwen provider: %v", err)
+	}
+	if err := providers.Global().Register(kimi.New()); err != nil {
+		log.Fatalf("failed to register kimi provider: %v", err)
+	}
+	if err := providers.Global().SetDefault("yuanbao"); err != nil {
+		log.Fatalf("failed to set default provider: %v", err)
+	}
+	api.SetProviderRegistry(providers.Global())
 
 	// Initialize the strict concurrency limiter from persisted overrides/env and report it.
 	rl := api.InitRateLimiter()

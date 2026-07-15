@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"yuanbao2api/yuanbao"
+	yuanbaoProvider "yuanbao2api/providers/yuanbao"
 )
 
 // ServerConfig holds the dynamic server configuration (same as internal/config but for API layer)
@@ -111,18 +111,19 @@ func EffectiveYuanbaoCookieSource() YuanbaoCookieSource {
 	return CookieSourceNone
 }
 
-// init wires the yuanbao client's CookieResolver to this package's
-// EffectiveYuanbaoCookie. This must run after yuanbao's package init
-// (which sets the default to a no-op). Go's import order guarantees
-// that: api imports yuanbao, so yuanbao's init runs first.
+// init wires the providers/yuanbao client's CookieResolver to this
+// package's EffectiveYuanbaoCookie. This must run after the
+// providers/yuanbao package init (which sets the default to a no-op).
+// Go's import order guarantees that: api imports providers/yuanbao,
+// so providers/yuanbao's init runs first.
 //
-// We cannot call EffectiveYuanbaoCookie directly from the yuanbao
-// package because that would create an import cycle (api already
-// imports yuanbao for NewClient). The function pointer indirection
-// keeps the resolution logic in one place (here) while letting the
-// client stay cycle-free.
+// We cannot call EffectiveYuanbaoCookie directly from the providers/yuanbao
+// package because that would create an import cycle (api imports the
+// provider, the provider does not import api). The function pointer
+// indirection keeps the resolution logic in one place (here) while
+// letting the client stay cycle-free.
 func init() {
-	yuanbao.CookieResolver = EffectiveYuanbaoCookie
+	yuanbaoProvider.CookieResolver = EffectiveYuanbaoCookie
 }
 
 // HandleStatus returns live concurrency/queue stats for observability.

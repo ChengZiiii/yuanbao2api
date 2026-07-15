@@ -128,14 +128,14 @@ checkbox。
 
 ## 10. Handler 改走 Registry
 
-- [ ] 10.1 `api/openai.go` 的 `HandleOpenAIChatCompletion`：用
+- [x] 10.1 `api/openai.go` 的 `HandleOpenAIChatCompletion`：用
       `provider.Registry().Route(req.Model)` 替代 `GetModelConfig` +
       `yuanbao.NewClient().SendRequestWithID`。
-- [ ] 10.2 `rl := limiterManager.For(prov.Name())` 替代 `GetRateLimiter()`。
-- [ ] 10.3 `handleOpenAIStream` 接受 `func(line string) (*provider.StreamChunk, error)`
+- [x] 10.2 `rl := limiterManager.For(prov.Name())` 替代 `GetRateLimiter()`。
+- [x] 10.3 `handleOpenAIStream` 接受 `func(line string) (*provider.StreamChunk, error)`
       作为参数，替代硬编码 `yuanbao.ParseStreamLine`。
-- [ ] 10.4 `api/anthropic.go` 同样改造。
-- [ ] 10.5 集成测试（或手测说明）：用 `deep_seek_v3` 走完整流程仍然
+- [x] 10.4 `api/anthropic.go` 同样改造。
+- [x] 10.5 集成测试（或手测说明）：用 `deep_seek_v3` 走完整流程仍然
       返回 yuanbao 风格响应；用 `qwen-max` 走流程返回 501 错误
       且 cookieSource 仍为 "env"（未启用则无 cookie）。
 

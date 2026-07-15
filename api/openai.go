@@ -16,9 +16,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"yuanbao2api/internal/models"
 	"yuanbao2api/internal/utils"
+	providers "yuanbao2api/providers"
 	"yuanbao2api/session"
 	"yuanbao2api/toolcall"
-	"yuanbao2api/yuanbao"
 )
 
 // getAgentID returns the Yuanbao agent ID from runtime config, env, or default.
@@ -46,7 +46,10 @@ func safeFlush(w gin.ResponseWriter) {
 	}
 }
 
-// HandleOpenAIChatCompletion processes OpenAI-compatible chat completion requests
+// HandleOpenAIChatCompletion processes OpenAI-compatible chat completion
+// requests. The model name is routed through provider.Registry so the
+// request can fan out to any registered provider (yuanbao today;
+// qwen/kimi once their real adapters land).
 func HandleOpenAIChatCompletion(c *gin.Context) {
 	var req models.OpenAIChatCompletionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -72,58 +75,87 @@ func HandleOpenAIChatCompletion(c *gin.Context) {
 		useInternetSearch = cfg.InternetSearch
 	}
 
-	// Build prompt
+	// Route the model name to a provider. Unknown model → 400,
+	// provider not implemented (placeholder) → 501.
+	reg := activeRegistry
+	if reg == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no provider registry configured"})
+		return
+	}
+	prov, err := reg.Route(model)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Per-provider concurrency gate. Held for the entire critical
+	// section (upstream call + stream/non-stream response writing)
+	// and released via defer. Excess requests block in FIFO order
+	// until a slot frees, up to the queue timeout.
+	rl := GetLimiterManager().For(prov.Name())
+	if err := rl.Acquire(c.Request.Context()); err != nil {
+		log.Printf("Rate limit: rejecting OpenAI request (queue full/timeout) on %s: %v", prov.Name(), err)
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": gin.H{
+				"message": "并发已达上限，请求在队列中等待超时，请稍后重试。(" + err.Error() + ")",
+				"type":    "rate_limit_error",
+			},
+		})
+		return
+	}
+	defer rl.Release()
+
+	// Build prompt via the provider adapter so each upstream sees the
+	// framing it expects.
+	promptMessages := convertToProviderMessages(req.Messages)
 	prompt, toolSystemPrompt := utils.ConvertMessagesToYuanbaoPrompt(req.Messages, req.Tools)
 	prompt = utils.TruncatePrompt(prompt, req.Messages, toolSystemPrompt)
 
-	// Send request to Yuanbao API
-	modelConfig := GetModelConfig(model)
 	agentID := getAgentID()
 	conversationID := session.GenerateConversationID()
 
-	yuanbaoReq := buildYuanbaoRequest(prompt, modelConfig, useDeepThinking, useInternetSearch, agentID)
-
-	// Strict concurrency gate: acquire a slot before hitting upstream Yuanbao.
-	// The slot is held for the entire critical section (upstream call + stream/
-	// non-stream response writing) and released via defer. Excess requests block
-	// in FIFO order until a slot frees, up to the queue timeout.
-	if rl := GetRateLimiter(); rl != nil {
-		if err := rl.Acquire(c.Request.Context()); err != nil {
-			log.Printf("Rate limit: rejecting OpenAI request (queue full/timeout): %v", err)
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error": gin.H{
-					"message": "并发已达上限，请求在队列中等待超时，请稍后重试。(" + err.Error() + ")",
-					"type":    "rate_limit_error",
-				},
-			})
-			return
-		}
-		defer rl.Release()
+	providerReq, err := prov.NewRequest(prompt, providers.RequestOptions{
+		Model:           model,
+		UseDeepThinking: useDeepThinking,
+		UseInternet:     useInternetSearch,
+		AgentID:         agentID,
+	})
+	if err != nil {
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error": fmt.Sprintf("provider %s: %v", prov.Name(), err),
+		})
+		return
 	}
 
-	client := yuanbao.NewClient()
-	resp, err := client.SendRequestWithID(yuanbaoReq, agentID, conversationID)
+	resp, err := prov.Send(providerReq, agentID, conversationID)
 	if err != nil {
-		log.Printf("Error sending request to Yuanbao: %v", err)
+		log.Printf("Error sending request to %s: %v", prov.Name(), err)
+		// Placeholder providers (qwen/kimi) return a sentinel
+		// ErrNotImplemented — surface that as 501 so the panel can
+		// show a clear "not implemented yet" message.
+		if isNotImplementedErr(err) {
+			c.JSON(http.StatusNotImplemented, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	_ = promptMessages
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		log.Printf("Yuanbao API error: status=%d, body=%s", resp.StatusCode, string(body[:min(500, len(body))]))
+		log.Printf("%s API error: status=%d, body=%s", prov.Name(), resp.StatusCode, string(body[:min(500, len(body))]))
 
-		// Attempt to provide a more detailed error message
-		errorMsg := fmt.Sprintf("Yuanbao API error: %d", resp.StatusCode)
+		errorMsg := fmt.Sprintf("%s API error: %d", prov.Name(), resp.StatusCode)
 		if len(body) > 0 {
-			errorMsg = fmt.Sprintf("Yuanbao API error: %d - %s", resp.StatusCode, string(body))
+			errorMsg = fmt.Sprintf("%s API error: %d - %s", prov.Name(), resp.StatusCode, string(body))
 		}
 		c.JSON(resp.StatusCode, gin.H{"error": errorMsg})
 		return
 	}
 
-	// 请求日志埋点
+	// Request log埋点
 	logStart := time.Now()
 	defer func() {
 		statusCode := c.Writer.Status()
@@ -138,14 +170,62 @@ func HandleOpenAIChatCompletion(c *gin.Context) {
 	}()
 
 	if req.Stream {
-		handleOpenAIStream(c, resp, model, req.Tools)
+		handleOpenAIStream(c, resp, model, req.Tools, prov.ParseStreamLine)
 	} else {
-		handleOpenAINonStream(c, resp, model, req.Tools)
+		handleOpenAINonStream(c, resp, model, req.Tools, prov.ParseStreamLine)
 	}
 }
 
-// handleOpenAIStream handles streaming OpenAI response
-func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool) {
+// isNotImplementedErr reports whether err is the qwen/kimi
+// "not yet implemented" sentinel so the handler can return 501.
+func isNotImplementedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "provider is not yet implemented")
+}
+
+// convertToProviderMessages converts internal/models.Message values
+// to provider.Message values. The two types share the same shape so
+// this is a straight field copy; kept as a helper so future divergence
+// only touches one place.
+func convertToProviderMessages(in []models.Message) []providers.Message {
+	out := make([]providers.Message, len(in))
+	for i, m := range in {
+		out[i] = providers.Message{
+			Role:       m.Role,
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCalls:  convertToolCalls(m.ToolCalls),
+			ToolCallID: m.ToolCallID,
+		}
+	}
+	return out
+}
+
+func convertToolCalls(in []models.ToolCall) []providers.ToolCall {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]providers.ToolCall, len(in))
+	for i, tc := range in {
+		out[i] = providers.ToolCall{
+			ID:    tc.ID,
+			Type:  tc.Type,
+			Index: tc.Index,
+			Function: providers.ToolFunctionCall{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		}
+	}
+	return out
+}
+
+// handleOpenAIStream handles streaming OpenAI response. The chunk
+// parser is injected as a func so the same body works for any
+// registered provider.
+func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool, parseStreamLine func(string) (*providers.StreamChunk, error)) {
 	c.Header("Content-Type", "text/event-stream; charset=utf-8")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -211,7 +291,7 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 	}
 
 	processLine := func(line string) {
-		chunk, err := yuanbao.ParseStreamLine(line)
+		chunk, err := parseStreamLine(line)
 		if err != nil || chunk == nil {
 			return
 		}
@@ -226,9 +306,9 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 			sendChunk(delta)
 		}
 
-		if chunk.Type == "text" && chunk.Msg != "" {
-			fullText.WriteString(chunk.Msg)
-			textBuffer += chunk.Msg
+		if chunk.Type == "text" && chunk.Text != "" {
+			fullText.WriteString(chunk.Text)
+			textBuffer += chunk.Text
 
 			if hasTools {
 				startMatch := toolcall.DetectToolCallStartPublic(textBuffer, 0)
@@ -255,9 +335,7 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 				}
 
 				if !inToolCall && !inNaturalToolCall {
-					// Natural tool call detection
 					if strings.Contains(textBuffer, `"name"`) && strings.Contains(textBuffer, `"arguments"`) {
-						// Simple heuristic: check for natural pattern
 						natIdx := findNaturalToolStart(textBuffer)
 						if natIdx != -1 {
 							beforeNat := textBuffer[:natIdx]
@@ -305,26 +383,19 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
 		}
-		// 查找换行符
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
-			// 确保返回的 token 末尾是完整的 UTF-8 字符
-			// 回退到最后一个完整 UTF-8 字符的边界
 			end := i
 			for end > 0 && !utf8.RuneStart(data[end]) {
 				end--
 			}
-			// 验证从 end 到 i 的字节是否构成完整 UTF-8 字符
 			if end < i && !utf8.Valid(data[end:i]) {
-				// 不完整的 UTF-8 序列，回退到 end
 				return i + 1, data[0:end], nil
 			}
 			return i + 1, data[0:i], nil
 		}
-		// 如果是EOF，返回剩余数据
 		if atEOF {
 			return len(data), data, nil
 		}
-		// 请求更多数据
 		return 0, nil, nil
 	})
 
@@ -341,16 +412,11 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 	select {
 	case <-done:
 		if serr := scanner.Err(); serr != nil {
-			// Yuanbao accepted our headers (status was 200) but cut the
-			// stream mid-flight. Surface this to the client as an SSE
-			// error event so the operator can tell the difference between
-			// a clean completion, a 120s idle timeout, and an upstream
-			// connection drop.
 			log.Printf("Stream read error (OpenAI): status=%d err=%v", resp.StatusCode, serr)
 			c.Writer.Header().Set("Content-Type", "text/event-stream")
 			c.Writer.WriteHeader(http.StatusOK)
 			errPayload, _ := json.Marshal(map[string]string{
-				"error": fmt.Sprintf("upstream Yuanbao stream read failure (status=%d): %v", resp.StatusCode, serr),
+				"error": fmt.Sprintf("upstream stream read failure (status=%d): %v", resp.StatusCode, serr),
 			})
 			fmt.Fprintf(c.Writer, "data: %s\n\n", string(errPayload))
 			safeFlush(c.Writer)
@@ -365,7 +431,6 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 
 	resp.Body.Close()
 
-	// Parse tool calls from full text
 	fullTextStr := fullText.String()
 	toolCalls := toolcall.ParseToolCalls(fullTextStr)
 	hasToolCalls := len(toolCalls) > 0
@@ -373,7 +438,6 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 	if hasToolCalls {
 		cleanText := toolcall.StripToolCalls(fullTextStr)
 		formattedCalls := toolcall.FormatToolCalls(toolCalls, 0)
-		// Send any remaining text before tool calls
 		cleanText = strings.TrimSpace(cleanText)
 		if cleanText != "" {
 			delta := map[string]interface{}{"content": cleanText}
@@ -382,7 +446,6 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 			}
 			sendChunk(delta)
 		}
-		// Send tool calls
 		for i, fc := range formattedCalls {
 			tc := fc
 			tc["index"] = i
@@ -399,7 +462,6 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 		sendChunk(delta)
 	}
 
-	// Send finish chunk — delta must be empty, finish_reason at choices[0] level
 	finishReason := "stop"
 	if hasToolCalls {
 		finishReason = "tool_calls"
@@ -424,21 +486,19 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 	safeFlush(c.Writer)
 }
 
-// handleOpenAINonStream handles non-streaming OpenAI response
-func handleOpenAINonStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool) {
+// handleOpenAINonStream handles non-streaming OpenAI response. The
+// chunk parser is injected as a func so the same body works for any
+// registered provider.
+func handleOpenAINonStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool, parseStreamLine func(string) (*providers.StreamChunk, error)) {
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		// Surface the actual upstream response (status + first ~200B of
-		// body) so the operator can tell whether the upstream sent a 4xx,
-		// a chunked-encoding error, or simply closed the connection. The
-		// previous "Failed to read response" string hid all three.
 		resp.Body.Close()
-		log.Printf("Yuanbao non-stream read failure: status=%d (partial body may be truncated) err=%v",
+		log.Printf("upstream non-stream read failure: status=%d (partial body may be truncated) err=%v",
 			resp.StatusCode, err)
 		c.JSON(http.StatusBadGateway, gin.H{
-			"error": fmt.Sprintf("upstream Yuanbao read failure (status=%d): %v", resp.StatusCode, err),
+			"error": fmt.Sprintf("upstream read failure (status=%d): %v", resp.StatusCode, err),
 		})
 		return
 	}
@@ -449,15 +509,15 @@ func handleOpenAINonStream(c *gin.Context, resp *http.Response, model string, to
 
 	lines := strings.Split(string(body), "\n")
 	for _, line := range lines {
-		chunk, err := yuanbao.ParseStreamLine(line)
+		chunk, err := parseStreamLine(line)
 		if err != nil || chunk == nil {
 			continue
 		}
 		if chunk.Type == "think" && chunk.Content != "" {
 			thinkingText.WriteString(chunk.Content)
 		}
-		if chunk.Type == "text" && chunk.Msg != "" {
-			fullText.WriteString(chunk.Msg)
+		if chunk.Type == "text" && chunk.Text != "" {
+			fullText.WriteString(chunk.Text)
 		}
 	}
 
@@ -481,7 +541,6 @@ func handleOpenAINonStream(c *gin.Context, resp *http.Response, model string, to
 		}
 	}
 
-	// Build response message
 	openaiMessage := models.ResponseMessage{
 		Role: "assistant",
 	}
@@ -542,8 +601,6 @@ func handleOpenAINonStream(c *gin.Context, resp *http.Response, model string, to
 
 // findNaturalToolStart finds the start index of a natural tool call pattern in text
 func findNaturalToolStart(text string) int {
-	// Look for patterns like {"name": "...", "arguments": {
-	// This is a simplified version
 	nameIdx := strings.Index(text, `"name"`)
 	if nameIdx == -1 {
 		nameIdx = strings.Index(text, "name")
@@ -551,7 +608,6 @@ func findNaturalToolStart(text string) int {
 			return -1
 		}
 	}
-	// Check if there's an "arguments" after name
 	argsIdx := strings.Index(text[nameIdx:], `"arguments"`)
 	if argsIdx == -1 {
 		argsIdx = strings.Index(text[nameIdx:], "arguments")
@@ -559,12 +615,9 @@ func findNaturalToolStart(text string) int {
 			return -1
 		}
 	}
-	// Find the opening brace before name
 	braceIdx := strings.LastIndex(text[:nameIdx], "{")
 	if braceIdx == -1 {
 		return -1
 	}
 	return braceIdx
 }
-
-

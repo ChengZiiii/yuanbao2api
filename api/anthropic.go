@@ -16,12 +16,12 @@ import (
 	"github.com/google/uuid"
 	"yuanbao2api/internal/models"
 	"yuanbao2api/internal/utils"
+	providers "yuanbao2api/providers"
 	"yuanbao2api/session"
 	"yuanbao2api/toolcall"
-	"yuanbao2api/yuanbao"
 )
 
-// HandleAnthropicMessages handles Anthropic Messages API requests
+// HandleAnthropicMessages handles Anthropic Messages API requests.
 func HandleAnthropicMessages(c *gin.Context) {
 	var req models.AnthropicMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -49,10 +49,8 @@ func HandleAnthropicMessages(c *gin.Context) {
 	useDeepThinking := req.Thinking != nil || req.DeepThinking
 	useInternetSearch := req.InternetSearch
 
-	// Convert messages
 	rawPrompt, toolSystemPrompt, _ := anthropicMessagesToPrompt(req.Messages, req.Tools)
 
-	// Handle system prompt
 	prompt := ""
 	sysPart := buildAnthropicSystem(req.System, toolSystemPrompt)
 	if sysPart != "" {
@@ -60,7 +58,6 @@ func HandleAnthropicMessages(c *gin.Context) {
 	}
 	prompt += rawPrompt
 
-	// Prompt length limit
 	if len(prompt) > toolcall.MAX_PROMPT_LENGTH {
 		sysPrefix := ""
 		sysEnd := strings.Index(prompt, "]\n\n")
@@ -75,40 +72,73 @@ func HandleAnthropicMessages(c *gin.Context) {
 		}
 	}
 
-	modelConfig := GetModelConfig(model)
+	// Route the model name through the registry so any registered
+	// provider can serve the request.
+	reg := activeRegistry
+	if reg == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"type":  "error",
+			"error": map[string]string{"type": "api_error", "message": "no provider registry configured"},
+		})
+		return
+	}
+	prov, err := reg.Route(model)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":  "error",
+			"error": map[string]string{"type": "invalid_request_error", "message": err.Error()},
+		})
+		return
+	}
+
+	rl := GetLimiterManager().For(prov.Name())
+	if err := rl.Acquire(c.Request.Context()); err != nil {
+		log.Printf("Rate limit: rejecting Anthropic request (queue full/timeout) on %s: %v", prov.Name(), err)
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"type": "error",
+			"error": map[string]string{
+				"type":    "rate_limit_error",
+				"message": "并发已达上限，请求在队列中等待超时，请稍后重试。(" + err.Error() + ")",
+			},
+		})
+		return
+	}
+	defer rl.Release()
+
 	agentID := getAgentID()
 	conversationID := session.GenerateConversationID()
 
-	yuanbaoReq := buildYuanbaoRequest(prompt, modelConfig, useDeepThinking, useInternetSearch, agentID)
-
-	// Strict concurrency gate: acquire a slot before hitting upstream Yuanbao.
-	// Held for the entire critical section (upstream call + stream/non-stream
-	// response writing) and released via defer. Excess requests queue in FIFO
-	// order until a slot frees, up to the queue timeout.
-	if rl := GetRateLimiter(); rl != nil {
-		if err := rl.Acquire(c.Request.Context()); err != nil {
-			log.Printf("Rate limit: rejecting Anthropic request (queue full/timeout): %v", err)
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"type": "error",
-				"error": map[string]string{
-					"type":    "rate_limit_error",
-					"message": "并发已达上限，请求在队列中等待超时，请稍后重试。(" + err.Error() + ")",
-				},
+	providerReq, err := prov.NewRequest(prompt, providers.RequestOptions{
+		Model:           model,
+		UseDeepThinking: useDeepThinking,
+		UseInternet:     useInternetSearch,
+		AgentID:         agentID,
+	})
+	if err != nil {
+		if isNotImplementedErr(err) {
+			c.JSON(http.StatusNotImplemented, gin.H{
+				"type":  "error",
+				"error": map[string]string{"type": "api_error", "message": err.Error()},
 			})
 			return
 		}
-		defer rl.Release()
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type":  "error",
+			"error": map[string]string{"type": "api_error", "message": err.Error()},
+		})
+		return
 	}
 
-	log.Printf("=== Anthropic API -> 鍏冨疂璇锋眰 ===")
-	log.Printf("Model: %s -> chatModelId: %s", model, modelConfig.ChatModelID)
-	log.Printf("Tools: %d", len(req.Tools))
-	log.Printf("Stream: %v", req.Stream)
-
-	client := yuanbao.NewClient()
-	resp, err := client.SendRequestWithID(yuanbaoReq, agentID, conversationID)
+	resp, err := prov.Send(providerReq, agentID, conversationID)
 	if err != nil {
-		log.Printf("Error sending request to Yuanbao: %v", err)
+		if isNotImplementedErr(err) {
+			c.JSON(http.StatusNotImplemented, gin.H{
+				"type":  "error",
+				"error": map[string]string{"type": "api_error", "message": err.Error()},
+			})
+			return
+		}
+		log.Printf("Error sending request to %s: %v", prov.Name(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"type":  "error",
 			"error": map[string]string{"type": "api_error", "message": err.Error()},
@@ -119,7 +149,7 @@ func HandleAnthropicMessages(c *gin.Context) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		errMsg := fmt.Sprintf("Yuanbao API error: %d", resp.StatusCode)
+		errMsg := fmt.Sprintf("%s API error: %d", prov.Name(), resp.StatusCode)
 		log.Printf("%s, body: %s", errMsg, string(body[:min(500, len(body))]))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"type":  "error",
@@ -130,7 +160,6 @@ func HandleAnthropicMessages(c *gin.Context) {
 
 	msgID := fmt.Sprintf("msg_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:24])
 
-	// 请求日志埋点
 	logStart := time.Now()
 	defer func() {
 		statusCode := c.Writer.Status()
@@ -145,9 +174,9 @@ func HandleAnthropicMessages(c *gin.Context) {
 	}()
 
 	if req.Stream {
-		handleAnthropicStream(c, resp, model, req.Tools, msgID)
+		handleAnthropicStream(c, resp, model, req.Tools, msgID, prov.ParseStreamLine)
 	} else {
-		handleAnthropicNonStream(c, resp, model, req.Tools, msgID)
+		handleAnthropicNonStream(c, resp, model, req.Tools, msgID, prov.ParseStreamLine)
 	}
 }
 
@@ -161,7 +190,6 @@ func anthropicMessagesToPrompt(messages []models.Message, tools []models.Tool) (
 		switch msg.Role {
 		case "user":
 			text := contentToString(msg.Content)
-			// Check for tool_result blocks
 			if blocks, ok := msg.Content.([]interface{}); ok {
 				var parts []string
 				for _, block := range blocks {
@@ -289,8 +317,10 @@ func buildAnthropicSystem(system interface{}, toolSystemPrompt string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// handleAnthropicStream handles streaming Anthropic response
-func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool, msgID string) {
+// handleAnthropicStream handles streaming Anthropic response. The
+// chunk parser is injected as a func so the same body works for any
+// registered provider.
+func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool, msgID string, parseStreamLine func(string) (*providers.StreamChunk, error)) {
 	c.Header("Content-Type", "text/event-stream; charset=utf-8")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -304,7 +334,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 	thinkingBlockStarted := false
 	hasTools := len(tools) > 0
 
-	// 将字节索引转换为字符索引（rune index）
 	byteToRuneIndex := func(s string, byteIdx int) int {
 		if byteIdx <= 0 {
 			return 0
@@ -315,12 +344,17 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		return len([]rune(s[:byteIdx]))
 	}
 
-	// UTF-8 安全的字符串切片辅助函数（接收字符索引）
 	substringRune := func(s string, start, end int) string {
 		runes := []rune(s)
-		if start < 0 { start = 0 }
-		if end > len(runes) { end = len(runes) }
-		if start >= end { return "" }
+		if start < 0 {
+			start = 0
+		}
+		if end > len(runes) {
+			end = len(runes)
+		}
+		if start >= end {
+			return ""
+		}
 		return string(runes[start:end])
 	}
 
@@ -337,7 +371,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		safeFlush(c.Writer)
 	}
 
-	// Send message_start
 	sendSSE("message_start", map[string]interface{}{
 		"type": "message_start",
 		"message": map[string]interface{}{
@@ -352,7 +385,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		},
 	})
 
-	// Send ping
 	sendSSE("ping", map[string]interface{}{})
 
 	flushTextAsContent := func() {
@@ -389,7 +421,7 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 	}
 
 	processLine := func(line string) {
-		chunk, err := yuanbao.ParseStreamLine(line)
+		chunk, err := parseStreamLine(line)
 		if err != nil || chunk == nil {
 			return
 		}
@@ -417,14 +449,12 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 			})
 		}
 
-		if chunk.Type == "text" && chunk.Msg != "" {
-		// 验证并修复UTF-8编码
-		if !utf8.ValidString(chunk.Msg) {
-			// 如果包含无效UTF-8，尝试修复（移除无效字节）
-			chunk.Msg = strings.ToValidUTF8(chunk.Msg, "")
-		}
-		fullText.WriteString(chunk.Msg)
-		textBuffer += chunk.Msg
+		if chunk.Type == "text" && chunk.Text != "" {
+			if !utf8.ValidString(chunk.Text) {
+				chunk.Text = strings.ToValidUTF8(chunk.Text, "")
+			}
+			fullText.WriteString(chunk.Text)
+			textBuffer += chunk.Text
 
 			if hasTools {
 				startMatch := toolcall.DetectToolCallStartPublic(textBuffer, 0)
@@ -433,7 +463,7 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 						inNaturalToolCall = false
 					}
 					beforeTag := substringRune(textBuffer, 0, byteToRuneIndex(textBuffer, startMatch.Index))
-			textBuffer = substringRune(textBuffer, byteToRuneIndex(textBuffer, startMatch.Index), len([]rune(textBuffer)))
+					textBuffer = substringRune(textBuffer, byteToRuneIndex(textBuffer, startMatch.Index), len([]rune(textBuffer)))
 					if beforeTag != "" {
 						if !textBlockStarted {
 							blockIdx := 0
@@ -481,8 +511,8 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 						natIdx := findNaturalToolStart(textBuffer)
 						if natIdx != -1 {
 							beforeNat := substringRune(textBuffer, 0, byteToRuneIndex(textBuffer, natIdx))
-				textBuffer = substringRune(textBuffer, byteToRuneIndex(textBuffer, natIdx), len([]rune(textBuffer)))
-				if beforeNat != "" {
+							textBuffer = substringRune(textBuffer, byteToRuneIndex(textBuffer, natIdx), len([]rune(textBuffer)))
+							if beforeNat != "" {
 								if !textBlockStarted {
 									blockIdx := 0
 									if thinkingBlockStarted {
@@ -520,9 +550,9 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 					fullTextStr := fullText.String()
 					fromNatStart := len(fullTextStr) - len(textBuffer)
 					subText := substringRune(fullTextStr, fromNatStart, len([]rune(fullTextStr)))
-						if balanced := toolcall.ExtractBalancedJSONPublic(subText, 0); balanced != "" {
-							inNaturalToolCall = false
-							textBuffer = substringRune(fullTextStr, fromNatStart+len(balanced), len([]rune(fullTextStr)))
+					if balanced := toolcall.ExtractBalancedJSONPublic(subText, 0); balanced != "" {
+						inNaturalToolCall = false
+						textBuffer = substringRune(fullTextStr, fromNatStart+len(balanced), len([]rune(fullTextStr)))
 					}
 				}
 
@@ -530,7 +560,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 					tagLookback := toolcall.ToolCallStartLength()
 					natLookback := toolcall.NaturalToolPrefixLookback(textBuffer)
 					lookback := max(tagLookback, natLookback)
-					// 使用 rune 切片确保 UTF-8 安全（按字符而非字节）
 					runes := []rune(textBuffer)
 					runeLen := len(runes) - lookback
 					if runeLen > 0 {
@@ -573,32 +602,24 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	
-	// 自定义分割函数：确保不在UTF-8字符中间切断
+
 	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
 		}
-		// 查找换行符
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
-			// 确保返回的 token 末尾是完整的 UTF-8 字符
-			// 回退到最后一个完整 UTF-8 字符的边界
 			end := i
 			for end > 0 && !utf8.RuneStart(data[end]) {
 				end--
 			}
-			// 验证从 end 到 i 的字节是否构成完整 UTF-8 字符
 			if end < i && !utf8.Valid(data[end:i]) {
-				// 不完整的 UTF-8 序列，回退到 end
 				return i + 1, data[0:end], nil
 			}
 			return i + 1, data[0:i], nil
 		}
-		// 如果是EOF，返回剩余数据
 		if atEOF {
 			return len(data), data, nil
 		}
-		// 请求更多数据
 		return 0, nil, nil
 	})
 
@@ -637,7 +658,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		nextIndex++
 	}
 
-	// Close text block
 	if textBlockStarted {
 		blockIdx := 0
 		if thinkingBlockStarted {
@@ -650,7 +670,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		textBlockStarted = false
 	}
 
-	// Send tool_use blocks
 	if hasToolCalls {
 		formattedCalls := toolcall.FormatToolCalls(toolCalls, 0)
 		for i, fc := range formattedCalls {
@@ -671,8 +690,8 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 				"type":  "content_block_delta",
 				"index": blockIdx,
 				"delta": map[string]interface{}{
-					"type":          "input_json_delta",
-					"partial_json":  fn["arguments"],
+					"type":         "input_json_delta",
+					"partial_json": fn["arguments"],
 				},
 			})
 
@@ -683,7 +702,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		}
 	}
 
-	// Close thinking block
 	if thinkingBlockStarted {
 		sendSSE("content_block_stop", map[string]interface{}{
 			"type":  "content_block_stop",
@@ -691,7 +709,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		})
 	}
 
-	// If no block was started, send a text block
 	if !textBlockStarted && !thinkingBlockStarted && !hasToolCalls {
 		sendSSE("content_block_start", map[string]interface{}{
 			"type":  "content_block_start",
@@ -717,7 +734,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 		})
 	}
 
-	// message_delta + message_stop
 	stopReason := "end_turn"
 	if hasToolCalls {
 		stopReason = "tool_use"
@@ -736,8 +752,10 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response, model string, to
 	})
 }
 
-// handleAnthropicNonStream handles non-streaming Anthropic response
-func handleAnthropicNonStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool, msgID string) {
+// handleAnthropicNonStream handles non-streaming Anthropic response.
+// The chunk parser is injected so the same body works for any
+// registered provider.
+func handleAnthropicNonStream(c *gin.Context, resp *http.Response, model string, tools []models.Tool, msgID string, parseStreamLine func(string) (*providers.StreamChunk, error)) {
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -754,15 +772,15 @@ func handleAnthropicNonStream(c *gin.Context, resp *http.Response, model string,
 
 	lines := strings.Split(string(body), "\n")
 	for _, line := range lines {
-		chunk, err := yuanbao.ParseStreamLine(line)
+		chunk, err := parseStreamLine(line)
 		if err != nil || chunk == nil {
 			continue
 		}
 		if chunk.Type == "think" && chunk.Content != "" {
 			thinkingText.WriteString(chunk.Content)
 		}
-		if chunk.Type == "text" && chunk.Msg != "" {
-			fullText.WriteString(chunk.Msg)
+		if chunk.Type == "text" && chunk.Text != "" {
+			fullText.WriteString(chunk.Text)
 		}
 	}
 
@@ -780,7 +798,6 @@ func handleAnthropicNonStream(c *gin.Context, resp *http.Response, model string,
 		cleanText = toolcall.StripToolCalls(fullTextStr)
 	}
 
-	// Build content blocks
 	content := []models.AnthropicContentBlock{}
 
 	if thinkingStr != "" {
@@ -805,10 +822,10 @@ func handleAnthropicNonStream(c *gin.Context, resp *http.Response, model string,
 				json.Unmarshal([]byte(args), &input)
 			}
 			content = append(content, models.AnthropicContentBlock{
-				Type:  "tool_use",
+				Type:     "tool_use",
 				ToolUseID: fc["id"].(string),
-				Name:  fn["name"].(string),
-				Input: input,
+				Name:     fn["name"].(string),
+				Input:    input,
 			})
 		}
 	} else {
