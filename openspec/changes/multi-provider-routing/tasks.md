@@ -6,14 +6,14 @@ checkbox。
 
 ## 1. Provider 抽象与 Registry
 
-- [ ] 1.1 新增 `providers/provider.go`：`Provider` 接口、`StreamChunk`、
+- [x] 1.1 新增 `providers/provider.go`：`Provider` 接口、`StreamChunk`、
       `ModelInfo`、`Message`、`Tool`、`RequestOptions` 类型。
-- [ ] 1.2 新增 `providers/registry.go`：全局 `Registry`、
+- [x] 1.2 新增 `providers/registry.go`：全局 `Registry`、
       `Register/Get/All/Names/Default/SetDefault/Route` 方法。
-- [ ] 1.3 实现 `Route(modelName)` 三步算法：默认 provider 优先 →
+- [x] 1.3 实现 `Route(modelName)` 三步算法：默认 provider 优先 →
       跨 provider 查找 → 失败返回 error。
 - [ ] 1.4 在 `main.go` 启动时 `Register` 三个 provider 并 `SetDefault("yuanbao")`。
-- [ ] 1.5 单元测试 `TestRegistry_Route`：覆盖默认命中、跨 provider、
+- [x] 1.5 单元测试 `TestRegistry_Route`：覆盖默认命中、跨 provider、
       未知 model、停用 provider 四种场景。
 
 ## 2. 迁 yuanbao → providers/yuanbao/
