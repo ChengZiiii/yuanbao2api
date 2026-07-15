@@ -107,12 +107,12 @@ checkbox。
 
 ## 8. /api/status 升级
 
-- [ ] 8.1 `api/config.go` 的 `HandleStatus`：响应改为
+- [x] 8.1 `api/config.go` 的 `HandleStatus`：响应改为
       `{ providers: { <name>: { maxConcurrency, inflight, waiting,
       requestCooldownMs, queueTimeoutSeconds } }, maxConcurrency,
       inflight, waiting, requestCooldownMs }`。
-- [ ] 8.2 顶层 stats 取自 `defaultProvider`。
-- [ ] 8.3 单元测试 `TestHandleStatus_MultiProvider`。
+- [x] 8.2 顶层 stats 取自 `defaultProvider`。
+- [x] 8.3 单元测试 `TestHandleStatus_MultiProvider`。
 
 ## 9. /v1/models 升级
 

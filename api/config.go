@@ -126,24 +126,114 @@ func init() {
 }
 
 // HandleStatus returns live concurrency/queue stats for observability.
+// The response is shaped as a per-provider map so the panel's
+// "站点管理" tab can render live numbers for every site, with the
+// top-level fields carrying the default provider's stats so the
+// existing dashboard cards stay unchanged.
 func HandleStatus(c *gin.Context) {
-	rl := GetRateLimiter()
-	if rl == nil {
-		c.JSON(http.StatusOK, gin.H{
-			"maxConcurrency":      0,
-			"queueTimeoutSeconds": 0,
-			"requestCooldownMs":   0,
-			"inflight":            0,
-			"waiting":             0,
-		})
-		return
+	mgr := GetLimiterManager()
+	serverConfigLock.RLock()
+	defaultProvider := serverConfig.DefaultProvider
+	if defaultProvider == "" {
+		defaultProvider = "yuanbao"
 	}
+	providersCopy := map[string]ProviderConfig{}
+	for k, v := range serverConfig.Providers {
+		providersCopy[k] = v
+	}
+	serverConfigLock.RUnlock()
+
+	perProvider := map[string]gin.H{}
+	var defStats gin.H
+
+	// Always include every known provider in the response (so the
+	// panel sees a stable list even when no requests have hit it
+	// yet); pass-through providers show zeros.
+	knownNames := []string{"yuanbao", "qwen", "kimi"}
+	added := map[string]bool{}
+	for _, n := range knownNames {
+		added[n] = true
+	}
+	for name := range providersCopy {
+		if !added[name] {
+			knownNames = append(knownNames, name)
+			added[name] = true
+		}
+	}
+
+	for _, name := range knownNames {
+		var maxC, qTimeout, cooldown int
+		if p, ok := providersCopy[name]; ok {
+			if p.MaxConcurrency != nil {
+				maxC = *p.MaxConcurrency
+			}
+			if p.QueueTimeoutSeconds != nil {
+				qTimeout = *p.QueueTimeoutSeconds
+			}
+			if p.RequestCooldownMs != nil {
+				cooldown = *p.RequestCooldownMs
+			}
+		}
+		inflight, waiting := int64(0), int64(0)
+		if mgr != nil {
+			rl := mgr.For(name)
+			if rl != nil {
+				inflight = rl.Inflight()
+				waiting = rl.Waiting()
+				if p, ok := providersCopy[name]; ok {
+					if p.MaxConcurrency == nil {
+						maxC = rl.MaxConcurrency()
+					}
+					if p.QueueTimeoutSeconds == nil {
+						qTimeout = int(rl.QueueTimeout().Seconds())
+					}
+					if p.RequestCooldownMs == nil {
+						cooldown = int(rl.Cooldown().Milliseconds())
+					}
+				} else {
+					maxC = rl.MaxConcurrency()
+					qTimeout = int(rl.QueueTimeout().Seconds())
+					cooldown = int(rl.Cooldown().Milliseconds())
+				}
+			}
+		}
+		stats := gin.H{
+			"maxConcurrency":      maxC,
+			"queueTimeoutSeconds": qTimeout,
+			"requestCooldownMs":   cooldown,
+			"inflight":            inflight,
+			"waiting":             waiting,
+		}
+		perProvider[name] = stats
+		if name == defaultProvider {
+			defStats = stats
+		}
+	}
+
+	if defStats == nil {
+		// No default provider matched (e.g. the persisted value
+		// points at a provider we don't know about). Fall back to
+		// the yuanbao entry; if even that is missing, leave the
+		// top-level fields zero-valued.
+		defStats = perProvider["yuanbao"]
+		if defStats == nil {
+			defStats = gin.H{
+				"maxConcurrency":      0,
+				"queueTimeoutSeconds": 0,
+				"requestCooldownMs":   0,
+				"inflight":            0,
+				"waiting":             0,
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"maxConcurrency":      rl.MaxConcurrency(),
-		"queueTimeoutSeconds": int(rl.QueueTimeout().Seconds()),
-		"requestCooldownMs":   int(rl.Cooldown().Milliseconds()),
-		"inflight":            rl.Inflight(),
-		"waiting":             rl.Waiting(),
+		"providers":          perProvider,
+		"maxConcurrency":     defStats["maxConcurrency"],
+		"queueTimeoutSeconds": defStats["queueTimeoutSeconds"],
+		"requestCooldownMs":  defStats["requestCooldownMs"],
+		"inflight":           defStats["inflight"],
+		"waiting":            defStats["waiting"],
 	})
 }
 
