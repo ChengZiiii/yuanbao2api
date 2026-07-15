@@ -289,8 +289,18 @@ const App = {
         const tokenInput = document.getElementById('yuanbaoHyTokenInput');
         const userInput = document.getElementById('yuanbaoHyUserInput');
         if (!tokenInput || !userInput) return;
-        const hyToken = tokenInput.value;
-        const hyUser = userInput.value;
+        // Lenient paste: if either field contains the legacy composite
+        // form ("hy_token=...; hy_user=..."), split it into the right
+        // fields automatically so users don't get them backwards.
+        let hyToken = (tokenInput.value || '').trim();
+        let hyUser  = (userInput.value  || '').trim();
+        const legacy = this._extractLegacyParts([hyToken, hyUser, document.getElementById('yuanbaoFullCookieInput')?.value || '']);
+        if (legacy) {
+            hyToken = legacy.hyToken;
+            hyUser  = legacy.hyUser;
+            tokenInput.value = hyToken;
+            userInput.value  = hyUser;
+        }
         try {
             const res = await fetch('/api/config', {
                 method: 'POST',
@@ -312,12 +322,61 @@ const App = {
         }
     },
 
+    /**
+     * Lenient legacy parser. Returns { hyToken, hyUser } extracted from any
+     * composite "hy_token=...; hy_user=..." form found in the inputs.
+     * Returns null if no composite was found (caller keeps the raw values).
+     */
+    _extractLegacyParts(rawValues) {
+        let hyToken = null, hyUser = null;
+        for (const raw of rawValues) {
+            if (!raw || raw.indexOf('=') < 0) continue;
+            // Only treat as legacy composite if it explicitly uses `hy_token=` or `hy_user=`.
+            // A bare token (base64 with no '=' connection) won't match.
+            if (!/hy_token\s*=|hy_user\s*=/.test(raw)) continue;
+            for (const pair of raw.split(/[;\n]/)) {
+                const idx = pair.indexOf('=');
+                if (idx <= 0) continue;
+                const k = pair.slice(0, idx).trim();
+                const v = pair.slice(idx + 1).trim();
+                if (k === 'hy_token' && v) hyToken = v;
+                else if (k === 'hy_user' && v) hyUser = v;
+            }
+            if (hyToken || hyUser) break;
+        }
+        if (!hyToken && !hyUser) return null;
+        return { hyToken: hyToken || '', hyUser: hyUser || '' };
+    },
+
+    /**
+     * Called by the onpaste handler of the "paste full cookie" helper input.
+     * Splits the composite form into the two component inputs and clears
+     * itself. The caller still has to click "保存 Cookie" to persist.
+     */
+    fillFromFullCookie() {
+        const full = document.getElementById('yuanbaoFullCookieInput');
+        const tk = document.getElementById('yuanbaoHyTokenInput');
+        const us = document.getElementById('yuanbaoHyUserInput');
+        if (!full || !tk || !us) return;
+        const legacy = this._extractLegacyParts([full.value]);
+        if (!legacy) {
+            alert('没识别到 hy_token / hy_user 键。请把 DevTools 中完整的 cookie 头整段粘到这里。');
+            return;
+        }
+        tk.value = legacy.hyToken;
+        us.value = legacy.hyUser;
+        full.value = '';
+        alert('已自动拆分：hy_token (长串) → 上框；hy_user (短 id) → 下框。检查后点「保存 Cookie」。');
+    },
+
     toggleCookieVisibility(visible) {
         const tokenInput = document.getElementById('yuanbaoHyTokenInput');
         const userInput = document.getElementById('yuanbaoHyUserInput');
+        const fullInput = document.getElementById('yuanbaoFullCookieInput');
         const nextType = visible ? 'text' : 'password';
         if (tokenInput) tokenInput.type = nextType;
         if (userInput) userInput.type = nextType;
+        if (fullInput) fullInput.type = nextType;
     },
 
     copyEndpoint(btn, text) {

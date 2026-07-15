@@ -121,17 +121,36 @@
                 </div>
                 <div class="config-row" style="align-items:flex-start;">
                     <span class="config-label">YUANBAO_COOKIE:</span>
-                    <div style="display:flex;flex-direction:column;gap:6px;">
-                        <div style="font-size:12px;color:#888;">Cookie 由 <code>hy_token</code> 与 <code>hy_user</code> 两部分组成，请分别在两个输入框粘贴对应的值。</div>
-                        <input type="password" id="yuanbaoHyTokenInput" class="config-input" style="width:360px;font-family:monospace;font-size:12px;" placeholder="hy_token 的值" autocomplete="off">
-                        <input type="password" id="yuanbaoHyUserInput" class="config-input" style="width:360px;font-family:monospace;font-size:12px;" placeholder="hy_user 的值" autocomplete="off">
-                    </div>
-                    <div style="display:flex;flex-direction:column;gap:6px;">
-                        <label class="toggle-pill" style="font-size:12px;"><input type="checkbox" id="yuanbaoCookieVisibleToggle" onchange="App.toggleCookieVisibility(this.checked)"> 显示 Cookie</label>
-                        <button class="btn-sm" onclick="App.saveCookie()">保存 Cookie</button>
+                    <div style="display:flex;flex-direction:column;gap:6px;min-width:420px;">
+                        <div style="font-size:12px;color:#888;">Cookie 由 <code>hy_token</code> 与 <code>hy_user</code> 两部分组成。不知道哪段往哪粘？把 DevTools 里整段粘第一个框，自动拆分到下方两个框。</div>
+
+                        <!-- 整段粘贴框：识别 hy_token= / hy_user= 后自动拆 -->
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:12px;color:#5af;font-weight:bold;min-width:90px;text-align:right;">📋 整段粘贴</span>
+                            <input type="password" id="yuanbaoFullCookieInput" class="config-input" style="flex:1;font-family:monospace;font-size:12px;" placeholder="hy_token=...; hy_user=..." onpaste="setTimeout(()=>App.fillFromFullCookie(), 0)" autocomplete="off">
+                        </div>
+
+                        <!-- hy_token：长串 base64 -->
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:12px;color:#0a0;font-weight:bold;min-width:90px;text-align:right;"><code>hy_token</code></span>
+                            <input type="password" id="yuanbaoHyTokenInput" class="config-input" style="flex:1;font-family:monospace;font-size:12px;" placeholder="长串 base64" autocomplete="off">
+                            <span style="font-size:11px;color:#888;min-width:160px;">（约 600+ 字符的 base64）</span>
+                        </div>
+
+                        <!-- hy_user：短 id -->
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="font-size:12px;color:#0a0;font-weight:bold;min-width:90px;text-align:right;"><code>hy_user</code></span>
+                            <input type="password" id="yuanbaoHyUserInput" class="config-input" style="flex:1;font-family:monospace;font-size:12px;" placeholder="短 id" autocomplete="off">
+                            <span style="font-size:11px;color:#888;min-width:160px;">（约 32 字符的 UUID 形式）</span>
+                        </div>
+
+                        <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
+                            <label class="toggle-pill" style="font-size:12px;"><input type="checkbox" id="yuanbaoCookieVisibleToggle" onchange="App.toggleCookieVisibility(this.checked)"> 显示 Cookie</label>
+                            <button class="btn-sm" onclick="App.saveCookie()">保存 Cookie</button>
+                        </div>
                     </div>
                 </div>
-                <div style="color:#ffa500;font-size:12px;margin:8px 0;">⚠ 修改后需重启服务才能生效</div>
+                <div style="color:#888;font-size:12px;margin:8px 0;">保存后会自动重启（约 1 秒），面板会自行刷新。</div>
                 <div class="config-row">
                     <button class="btn-sm" onclick="App.checkCookie()">🔍 检测 Cookie</button>
                     <span id="cookieResult" style="font-size:13px;margin-left:12px;"></span>
