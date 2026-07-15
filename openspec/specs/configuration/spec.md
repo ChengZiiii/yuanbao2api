@@ -5,40 +5,63 @@ TBD - created by archiving change runtime-cookie. Update Purpose after archive.
 ## Requirements
 ### Requirement: Cookie 持久化至 runtime_config.json
 
-> 修改范围：数据模型。Cookie 在磁盘上的 JSON 形态从
-> `"yuanbaoCookie": "hy_token=...; hy_user=..."`（字符串）
-> 改为 `"yuanbaoCookie": {"hyToken":"...","hyUser":"..."}`（对象）。
+> 修改范围：存储结构从单层字段升级为 `providers` 站点表 + `defaultProvider`。
 > 写入语义（原子性、`0600` 权限、Windows rename 行为）保持不变
-> （已由 `fix-windows-rename` 锁定）。
+> （已由 `fix-windows-rename` 锁定）。Cookie 字段双形态语义保持不变
+> （已由 `yuanbao-cookie-fields` 锁定）。
 
-系统 SHALL 将元宝上游 Cookie 持久化到 `runtime_config.json` 的
-`yuanbaoCookie` 字段，类型为对象 `{hyToken, hyUser}`，以便运维能在
-不编辑 `.env` 的前提下更新 Cookie，且无需手敲 `hy_token=` / `hy_user=`
-字段名。
+系统 SHALL 把运行时配置以**多 provider 表**的形式持久化到
+`runtime_config.json`，结构为：
 
-Cookie SHALL 以原子方式写入，文件权限为 `0600`，与现有
-`SaveRuntimeConfig` 的写入语义保持一致。`yuanbaoCookie` SHALL 可选
-（可缺省）：缺省即代表"无运行时覆盖"，系统从而回落至环境变量。
+```json
+{
+  "providers": {
+    "yuanbao": { "enabled": true, "cookie": { "hyToken": "...", "hyUser": "..." }, "agentId": "...", "maxConcurrency": 1, "queueTimeoutSeconds": 120, "requestCooldownMs": 800 },
+    "qwen":    { "enabled": false },
+    "kimi":    { "enabled": false }
+  },
+  "defaultProvider": "yuanbao"
+}
+```
 
-为支持从 `runtime-cookie` 期间的中间数据格式迁移，
-`YuanbaoCookie` 类型 SHALL 同时接受 JSON 字符串形式
-（`"hy_token=xxx; hy_user=yyy"`）作为反序列化输入；其 SHALL 被解析为
-对应字段。序列化输出 SHALL 始终是对象形式。
+每个 provider 的配置 SHALL 包含：
+- `enabled`（可选，缺省 false）：该 provider 是否接受请求。
+- `cookie`（可选）：`YuanbaoCookie` 对象，qwen/kimi 占位只用 `hyToken`。
+- `agentId`（可选）：yuanbao 专属；qwen/kimi 忽略。
+- `maxConcurrency` / `queueTimeoutSeconds` / `requestCooldownMs`
+  （三者皆可选）：该 provider 的限流参数，缺省回落至环境变量
+  （`MAX_CONCURRENCY` / `QUEUE_TIMEOUT_SECONDS` / `REQUEST_COOLDOWN_MS`），
+  再回落至默认 1/120/0。
+
+文件 SHALL 以原子方式写入，权限 `0600`，与既有 `SaveRuntimeConfig`
+语义保持一致。
+
+为支持从 `runtime-cookie` 期间的旧文件格式迁移，
+`RuntimeConfig` SHALL 自定义 `UnmarshalJSON` 同时接受：
+1. **新形态** `{providers: {...}, defaultProvider: "..."}`；
+2. **旧形态** `{yuanbaoCookie: "...", maxConcurrency: ...}` —— 旧顶层
+   字段被归到 `providers.yuanbao`，`defaultProvider = "yuanbao"`。
+   `YuanbaoCookie` 自身的字符串/对象双形态（由 `yuanbao-cookie-fields`
+   锁定）继续生效。
+
+序列化输出 SHALL 始终是新形态。
 
 #### Scenario: 持久化往返
 
-- **WHEN** 运维经 `POST /api/config { yuanbaoCookie: { hyToken: "abc", hyUser: "xyz" } }` 保存 Cookie
-- **THEN** 磁盘上 `runtime_config.json` 包含
-  `"yuanbaoCookie": {"hyToken":"abc","hyUser":"xyz"}`
+- **WHEN** 运维经 `POST /api/config { providers: { yuanbao: { enabled: true, cookie: { hyToken: "abc", hyUser: "xyz" } } }, defaultProvider: "yuanbao" }` 保存
+- **THEN** 磁盘上 `runtime_config.json` 包含 `providers.yuanbao.cookie`
+  为 `{"hyToken":"abc","hyUser":"xyz"}`，`defaultProvider` 为 `"yuanbao"`
 - **AND** 重启后 `LoadRuntimeConfig()` 返回的 `RuntimeConfig`
-  其 `YuanbaoCookie` 字段 `HyToken == "abc"` 且 `HyUser == "xyz"`
+  其 `Providers["yuanbao"].Cookie.HyToken == "abc"`、
+  `Providers["yuanbao"].Cookie.HyUser == "xyz"`、
+  `DefaultProvider == "yuanbao"`
 
 #### Scenario: 向后兼容加载
 
 - **WHEN** `runtime_config.json` 已存在但不含 `yuanbaoCookie` 字段
-  （例如本 change 之前生成的文件）
+  （早期 `runtime-cookie` 之前的文件）
 - **THEN** `LoadRuntimeConfig()` 返回的 `RuntimeConfig` 其
-  `YuanbaoCookie == nil`
+  `Providers` 为空（nil/空 map），`DefaultProvider == ""`
 - **AND** Cookie 解析逻辑回落至 env 值
 
 #### Scenario: 旧字符串形式自动迁移
@@ -47,8 +70,11 @@ Cookie SHALL 以原子方式写入，文件权限为 `0600`，与现有
   `yuanbaoCookie` 为字符串 `"hy_token=legacy; hy_user=old"`
   （`runtime-cookie` 期间可能落地的格式）
 - **THEN** `LoadRuntimeConfig()` 返回的 `RuntimeConfig`
-  其 `YuanbaoCookie` 字段 `HyToken == "legacy"` 且 `HyUser == "old"`
-- **AND** Cookie 解析逻辑按新数据模型工作
+  其 `Providers["yuanbao"].Cookie.HyToken == "legacy"`、
+  `Providers["yuanbao"].Cookie.HyUser == "old"`、
+  `DefaultProvider == "yuanbao"`
+- **AND** 旧顶层字段 `maxConcurrency` / `queueTimeoutSeconds` /
+  `requestCooldownMs` 被归到 `Providers["yuanbao"]` 对应字段
 
 #### Scenario: 目标不存在（Unix / 干净 Windows）
 
@@ -81,163 +107,186 @@ Cookie SHALL 以原子方式写入，文件权限为 `0600`，与现有
 
 ### Requirement: Cookie 解析优先级
 
-> 修改范围：`EffectiveYuanbaoCookie()` 的内部实现。它仍然返回 HTTP
-> `Cookie` 头字符串（拼装自 `HyToken` 与 `HyUser`），外部契约不变。
+> 修改范围：`EffectiveYuanbaoCookie()` 现在是 yuanbao provider 专属，
+> 调用方从 `provider.Registry().Yuanbao().EffectiveCookie()` 获取，
+> 但**外部行为完全保持不变**。
 
-系统 SHALL 在每次发起上游请求时（而非在客户端构造时）解析元宝上游 Cookie，
-按以下优先级：
+系统 SHALL 在每次发起上游请求时（而非在客户端构造时）解析 yuanbao
+provider 使用的 Cookie，按以下优先级：
 
-1. `runtime_config.json:yuanbaoCookie`（已设且 `HyToken` 或 `HyUser`
-   任一非空时）
+1. `runtime_config.json:providers.yuanbao.cookie`（已设且 `HyToken` 或
+   `HyUser` 任一非空时）
 2. `YUANBAO_COOKIE` 环境变量（已设且非空时）—— 作为整段 Cookie 头
    字符串原样使用
 3. 空字符串（调用方按"无 Cookie"处理）
 
-解析逻辑 SHALL 封装在单一助手（`EffectiveYuanbaoCookie()`）中，
-所有上游调用方均通过该助手读取，禁止直接读 env。
+解析逻辑 SHALL 封装在 yuanbao provider 内部（`providers/yuanbao`
+包），所有上游调用方通过 yuanbao provider 实例的 `EffectiveCookie()`
+方法读取，禁止直接读 env。
 
-当优先级 1 命中且 `YuanbaoCookie` 不为 nil 时，组装 SHALL 按
-`hy_token=<HyToken>; hy_user=<HyUser>` 格式进行；任一字段为空时
-对应段 SHALL 省略。
+当优先级 1 命中时，组装 SHALL 按 `hy_token=<HyToken>; hy_user=<HyUser>`
+格式进行；任一字段为空时对应段 SHALL 省略。
 
 #### Scenario: 运行时覆盖 env
 
 - **GIVEN** `runtime_config.json` 中
-  `yuanbaoCookie = {"hyToken":"runtime-tok","hyUser":"runtime-usr"}`
+  `providers.yuanbao.cookie = {"hyToken":"runtime-tok","hyUser":"runtime-usr"}`
   **AND** env `YUANBAO_COOKIE` 为 `"env-cookie"`
-- **WHEN** 上游客户端发起请求
+- **WHEN** yuanbao provider 发送请求
 - **THEN** `Cookie` 请求头为 `"hy_token=runtime-tok; hy_user=runtime-usr"`
 
 #### Scenario: env 兜底
 
-- **GIVEN** `runtime_config.json` 中无 `yuanbaoCookie` 字段
+- **GIVEN** `runtime_config.json` 中 yuanbao provider 的 `cookie` 字段未设
   **AND** env `YUANBAO_COOKIE` 为 `"env-cookie"`
-- **WHEN** 上游客户端发起请求
+- **WHEN** yuanbao provider 发送请求
 - **THEN** `Cookie` 请求头为 `"env-cookie"`
 
 #### Scenario: 两者皆空
 
-- **GIVEN** 运行时 `YuanbaoCookie == nil` **AND** env 无 Cookie
-- **WHEN** 上游客户端发起请求
+- **GIVEN** yuanbao provider 无 cookie **AND** env 无 Cookie
+- **WHEN** yuanbao provider 发送请求
 - **THEN** 出站请求不设置 `Cookie` 请求头
 - **AND** 上游按预期返回 4xx，由 API 层以普通上游错误形式回传调用方
 
 ### Requirement: 经管理 API 更新 Cookie
 
-> 修改范围：请求体形态。`yuanbaoCookie` 字段从字符串改为对象。
-> 校验与清空/缺省语义保持不变。
+> 修改范围：请求体形态从扁平字段（`yuanbaoCookie`）升级为嵌套
+> `providers` 对象。**双形态兼容**：`HandleSetConfig` 同时接受
+> 旧 `{yuanbaoCookie, maxConcurrency, ...}` 形态与新
+> `{providers: {...}, defaultProvider: "..."}` 形态；旧形态被
+> 翻译到新形态后写入持久化。
 
-`POST /api/config` SHALL 接受可选的 `yuanbaoCookie` **对象**
-字段，结构为 `{hyToken: string, hyUser: string}`。出现该字段时：
+`POST /api/config` SHALL 同时支持两种请求体形态：
 
-- `yuanbaoCookie` 必须为 JSON object，否则请求 SHALL 被拒，HTTP 400。
-- 若对象两字段都为空字符串或对象两字段都缺省，运行时覆盖 SHALL
-  被清除（`YuanbaoCookie` 设为 `nil` 并从 `runtime_config.json` 移除）。
-- 否则运行时 SHALL 持久化该对象（仅写入提供的字段；缺省字段保留
-  为空字符串）。
+**新形态** `{providers: {<name>: ProviderConfig}, defaultProvider: "..."}`：
+- `providers` 必须为 object；每条 provider 配置按既有规则校验。
+- `defaultProvider` 可选；缺省则保持当前值不变。
 
-端点 SHALL 继续沿用现有的部分更新规则：`yuanbaoCookie` 字段在请求体
-中缺省时 MUST NOT 清零既有值（与既有 `deepThinking` 等字段一致）。
+**旧形态**（向后兼容，触发条件：请求体中**没有** `providers` 字段
+但**有** `yuanbaoCookie` / `maxConcurrency` / `queueTimeoutSeconds`
+/ `requestCooldownMs` 中任一旧字段）：
+- 旧字段被映射到 `providers.yuanbao`；`defaultProvider = "yuanbao"`。
+- 与新形态的 Cookie 校验规则一致。
+
+端点 SHALL 继续沿用现有的部分更新规则：缺省字段 MUST NOT 清零既有值
+（与既有 `deepThinking` 等字段一致）。
 
 #### Scenario: 保存非空 Cookie
 
 - **WHEN** `POST /api/config` 收到
   `{ "yuanbaoCookie": { "hyToken": "abc", "hyUser": "xyz" } }`
 - **THEN** 响应为 HTTP 200，并附最新服务端配置
+- **AND** 旧请求体被自动翻译为新形态后写入持久化
+  （`runtime_config.json` 包含 `providers.yuanbao.cookie = {"hyToken":"abc","hyUser":"xyz"}`、
+  `defaultProvider = "yuanbao"`）
+
+#### Scenario: 保存双字段 Cookie（新形态）
+
+- **WHEN** `POST /api/config` 收到
+  `{ "providers": { "yuanbao": { "enabled": true, "cookie": { "hyToken": "abc", "hyUser": "xyz" } } }, "defaultProvider": "yuanbao" }`
+- **THEN** 响应为 HTTP 200，并附最新服务端配置
 - **AND** `runtime_config.json` 包含
-  `"yuanbaoCookie": {"hyToken":"abc","hyUser":"xyz"}`
+  `providers.yuanbao.cookie = {"hyToken":"abc","hyUser":"xyz"}`、
+  `defaultProvider = "yuanbao"`
 
 #### Scenario: 用空字符串清除运行时 Cookie
 
-- **WHEN** `POST /api/config` 收到 `{ "yuanbaoCookie": {} }` 且当前
-  已持久化有运行时 Cookie（请求体中的对象两字段都为空或都缺省）
+- **WHEN** `POST /api/config` 收到 `{ "yuanbaoCookie": {} }` 或
+  `{ "providers": { "yuanbao": { "cookie": {} } } }` 且当前已持久化有
+  运行时 Cookie（请求体中的对象两字段都为空或都缺省）
 - **THEN** 响应为 HTTP 200
-- **AND** 下次 `LoadRuntimeConfig()` 返回 `YuanbaoCookie == nil`
+- **AND** 下次 `LoadRuntimeConfig()` 返回
+  `Providers["yuanbao"].Cookie == nil`
 - **AND** 后续上游请求从 env 解析 Cookie
 
 #### Scenario: 缺省字段为 no-op
 
 - **WHEN** `POST /api/config` 收到 `{ "deepThinking": true }`，无
-  `yuanbaoCookie` 字段
+  `providers` 与 `yuanbaoCookie` 字段
 - **THEN** 既有运行时 Cookie（如有）保持不变
 - **AND** 不会以清空 Cookie 的方式重写 `runtime_config.json`
 
 #### Scenario: 类型错误
 
-- **WHEN** `POST /api/config` 收到 `{ "yuanbaoCookie": "not-an-object" }`
+- **WHEN** `POST /api/config` 收到
+  `{ "yuanbaoCookie": "not-an-object" }` 或
+  `{ "providers": { "yuanbao": { "cookie": "not-an-object" } } }`
 - **THEN** 响应为 HTTP 400，并附说明性错误信息
 
 ### Requirement: 经 /api/env 暴露 Cookie 来源
 
-> 修改范围：响应体增加分项掩码字段，旧的 `yuanbaoCookie` 字段保留。
+> 修改范围：响应体增加 `providers` 摘要与 `defaultProvider` 字段；
+> 旧顶层 Cookie 字段保留以维持旧客户端。
 
-`GET /api/env` SHALL 继续把 Cookie 打码为前 8 位 + `****`，
-同时 SHALL 包含 `cookieSource` 字段（值同前：`"runtime"` / `"env"` /
-`"none"`）。
-
-此外 SHALL 包含：
-- `yuanbaoHyToken`：当前生效 Cookie 中 `hy_token` 部分的前 8 位 +
-  `****`；空时为 `""`。
-- `yuanbaoHyUser`：当前生效 Cookie 中 `hy_user` 部分的前 8 位 +
-  `****`；空时为 `""`。
-- `yuanbaoCookie`：保持既有字段，拼装后字符串的前 8 位 + `****`；
-  空时为 `""`。
-
-> 旧 `yuanbaoCookie` 字段保留是为了不破坏可能依赖它的高级客户端。
+`GET /api/env` SHALL 在原有字段之外额外包含：
+- `defaultProvider`（string）：当前默认 provider 名字。
+- `providers`（object）：每个 provider 的关键字段摘要（name、enabled、
+  cookieSource、cookie 掩码、agentId 掩码、concurrency）。
+- 旧 `yuanbaoCookie` / `yuanbaoHyToken` / `yuanbaoHyUser` 字段保留，
+  取自 `defaultProvider`（默认 yuanbao）。
+- 旧 `cookieSource` 字段保留。
 
 #### Scenario: 显示来源
 
-- **WHEN** runtime `YuanbaoCookie` 为 `{"hyToken":"abcdef1234","hyUser":"uvwxyz5678"}`，
-  env Cookie 未设
+- **WHEN** runtime `Providers["yuanbao"].Cookie` 为
+  `{"hyToken":"abcdef1234","hyUser":"uvwxyz5678"}`，env Cookie 未设
 - **THEN** `GET /api/env` 返回
-  `{ "yuanbaoCookie": "hy_toke****", "yuanbaoHyToken": "abcdef1****", "yuanbaoHyUser": "uvwxyz****", "cookieSource": "runtime", ... }`
+  ```json
+  {
+    "defaultProvider": "yuanbao",
+    "providers": {
+      "yuanbao": {
+        "enabled": true,
+        "cookieSource": "runtime",
+        "yuanbaoCookie": "hy_toke****",
+        "yuanbaoHyToken": "abcdef1****",
+        "yuanbaoHyUser": "uvwxyz****"
+      }
+    },
+    "cookieSource": "runtime"
+  }
+  ```
 
 #### Scenario: env 兜底报告 env 来源
 
-- **WHEN** 运行时 Cookie 未设，env Cookie 已设
-- **THEN** `GET /api/env` 返回 `"cookieSource": "env"`
+- **WHEN** runtime yuanbao cookie 未设，env `YUANBAO_COOKIE` 已设
+- **THEN** `GET /api/env` 返回 `cookieSource: "env"`
 
 ### Requirement: 面板 Cookie 编辑入口
 
-> 修改范围：UI 由单个 textarea 改为两个独立 input。
+> 修改范围：UI 升级。新增"站点管理"tab 作为推荐入口；旧"配置"tab
+> 的元宝 Cookie 字段**保留**但仅作旧入口，新工作流推荐"站点管理"。
 
-管理面板的配置页 SHALL 提供**两个独立输入框**用于 Cookie：
+管理面板 SHALL 提供**两个独立输入框**用于 yuanbao provider 的
+Cookie 编辑（沿用 `yuanbao-cookie-fields` 锁定）：
+- `id="yuanbaoHyTokenInput"`
+- `id="yuanbaoHyUserInput"`
 
-- 一个 `id="yuanbaoHyTokenInput"` 用于填 `hy_token` 的值；
-- 一个 `id="yuanbaoHyUserInput"` 用于填 `hy_user` 的值；
-- 一个 "保存 Cookie" 按钮，点击后 POST
-  `{ yuanbaoCookie: { hyToken: <value>, hyUser: <value> } }` 到
-  `/api/config`。
+输入框 SHALL 默认隐藏（带显隐切换）。每个输入框 SHALL 在
+`GET /api/env` 返回时被预填充为对应字段的掩码值。
 
-两个输入框 SHALL 默认隐藏（带显隐切换），以避免明文暴露在屏幕上。
-每个输入框 SHALL 在 `GET /api/env` 返回时被预填充为对应字段的掩码值，
-以便运维能在不清空的情况下编辑单个字段。
-
-保存成功后，面板 SHALL 展示"需重启生效"提示（与并发保存一致），
-引导用户点击现有的"🔄 重启服务"按钮。
+保存 SHALL POST 到 `/api/config`：
+- 新形态优先：
+  `{ providers: { yuanbao: { cookie: { hyToken, hyUser } } } }`
+- 旧形态回退（仅旧"配置"tab 仍可走）：
+  `{ yuanbaoCookie: { hyToken, hyUser } }`
 
 #### Scenario: 运维经面板更新 Cookie
 
 - **GIVEN** 运维已在两个输入框分别填好新值
 - **WHEN** 运维点击"保存 Cookie"
 - **THEN** 面板向 `/api/config` 发起
-  `{ yuanbaoCookie: { hyToken: <tok>, hyUser: <usr> } }` 的 POST
+  `{ providers: { yuanbao: { cookie: { hyToken: <tok>, hyUser: <usr> } } } }` 的 POST
 - **AND** HTTP 200 时，面板显示"已保存。点击'重启服务'按钮生效。"
 - **AND** HTTP 非 200 时，面板显示 API 返回的错误信息
 
 ### Requirement: 原子 rename 助手 internal 契约
 
-> 新增 helper `atomicRename(tmp, target string) error` 的内部契约。
-> 该 helper 是 `SaveRuntimeConfig` 的内部实现细节，不暴露给外部
-> package，因此本 Requirement 描述其**实现层契约**，非 API 契约。
+> 既有 Requirement（`fix-windows-rename` 引入），行为不变。
 
-`atomicRename` SHALL：
-- 接受 tmp 与 target 两个路径字符串。
-- 在 Unix / Linux / macOS 上 SHALL 等价于一次 `os.Rename(tmp, target)`。
-- 在 Windows 上 SHALL 实现"重试 → 必要时 fallback 到 remove+rename"
-  的语义，使得 `Access is denied` 类错误最终能成功。
-- 不得泄露 `.tmp` 文件：成功或最终失败都必须清理 tmp。
-- SHALL 不修改 target 文件的内容（写入内容由调用方决定）。
+`atomicRename(tmp, target string) error` SHALL 在 Windows 上
+"重试 → 必要时 fallback 到 remove+rename" 的语义保持不变。
 
 #### Scenario: 原子 rename 成功
 
@@ -247,11 +296,9 @@ Cookie SHALL 以原子方式写入，文件权限为 `0600`，与现有
 
 #### Scenario: 原子 rename 在 Windows 上重试
 
-- **GIVEN** 模拟首次 `os.Rename` 返回 `Access is denied` 错误
-  （通过文件系统使目标被锁，或在测试中 stub）
+- **GIVEN** 首次 `os.Rename` 返回 `Access is denied` 错误
 - **WHEN** 调用 `atomicRename`
 - **THEN** helper 在短暂重试或 fallback 后最终成功
-- **AND** 不向上抛出原始错误
 
 #### Scenario: 原子 rename 错误传播
 
@@ -262,8 +309,11 @@ Cookie SHALL 以原子方式写入，文件权限为 `0600`，与现有
 
 ### Requirement: Cookie 头拼装
 
-当 `EffectiveYuanbaoCookie()` 在运行时命中优先级 1（即 `YuanbaoCookie`
-非 nil 且至少一字段非空）时，组装 SHALL 按以下规则：
+> 既有 Requirement（`yuanbao-cookie-fields` 引入），行为不变。
+
+当 `EffectiveYuanbaoCookie()` 在运行时命中优先级 1（即
+`Providers["yuanbao"].Cookie` 非 nil 且至少一字段非空）时，组装 SHALL
+按以下规则：
 
 - 若 `HyToken` 非空，包含段 `hy_token=<HyToken>`。
 - 若 `HyUser` 非空，包含段 `hy_user=<HyUser>`。
@@ -292,4 +342,150 @@ Cookie SHALL 以原子方式写入，文件权限为 `0600`，与现有
 
 - **WHEN** `YuanbaoCookie{HyToken:"", HyUser:""}`
 - **THEN** `HeaderValue()` 返回 `""`
+
+### Requirement: Provider 接口
+
+`Provider` 接口 SHALL 描述任何上游 web2api 必须实现的方法集。
+
+#### Scenario: yuanbao 实现 Provider
+
+- **WHEN** `providers/yuanbao/provider.go` 实例化
+- **THEN** 其 `Name() = "yuanbao"`，`Models()` 至少包含 `deep_seek_v3` 与 `hunyuan`
+- **AND** `BuildPrompt` / `NewRequest` / `Send` / `ParseStreamLine` 在正常路径下可用
+
+#### Scenario: qwen 占位实现 Provider
+
+- **WHEN** `providers/qwen/provider.go` 实例化
+- **THEN** 其 `Name() = "qwen"`，`Models()` 至少包含 `qwen-max`、`qwen-plus`
+- **AND** `BuildPrompt` / `NewRequest` / `Send` 全部返回
+  `"qwen provider is not yet implemented"` 错误
+- **AND** `ParseStreamLine` 始终返回 `nil, nil`
+
+#### Scenario: kimi 占位实现 Provider
+
+- **WHEN** `providers/kimi/provider.go` 实例化
+- **THEN** 其 `Name() = "kimi"`，`Models()` 至少包含 `kimi-k2`、`moonshot-v1-128k`
+- **AND** `BuildPrompt` / `NewRequest` / `Send` 全部返回
+  `"kimi provider is not yet implemented"` 错误
+- **AND** `ParseStreamLine` 始终返回 `nil, nil`
+
+### Requirement: Registry 模型路由
+
+`Registry` SHALL 根据 `model` 名把请求路由到对应 provider。
+
+> Route 是纯 model→provider 名字查找（per design §8 carve-out），不
+> 检查 enablement；enable 检查由 chat handler 在 Route 之后做
+> （"命中但 provider 停用" 返回 HTTP 503）。
+
+#### Scenario: 默认 provider 命中
+
+- **GIVEN** `defaultProvider = "yuanbao"` 且 yuanbao 已启用
+- **WHEN** `Registry.Route("deep_seek_v3")` 被调用
+- **THEN** 返回 yuanbao provider 实例，无 error
+
+#### Scenario: 跨 provider 命中
+
+- **GIVEN** qwen provider 已启用
+- **WHEN** `Registry.Route("qwen-max")` 被调用
+- **THEN** 返回 qwen provider 实例，无 error
+
+#### Scenario: 未知 model
+
+- **WHEN** `Registry.Route("nonexistent-model")` 被调用
+- **THEN** 返回 `(nil, error)`，error 包含 "unknown model"
+
+#### Scenario: 命中但 provider 停用
+
+- **GIVEN** qwen provider `enabled == false`
+- **WHEN** chat handler 在 `Route("qwen-max")` 之后检查 enablement
+- **THEN** handler 返回 HTTP 503，error 包含 "provider disabled"
+- 解释：Route 本身只做名字查找；停用检查由调用方负责
+
+#### Scenario: 命中占位 provider（qwen/kimi）
+
+- **GIVEN** qwen 已启用但是占位
+- **WHEN** `Registry.Route("qwen-max")` 被调用
+- **THEN** 返回 qwen provider 实例（路由成功）；调用方
+  `BuildPrompt` / `Send` 时才会收到 "not implemented" 错误
+- 解释：Registry 只做"是否存在"判断，**是否真实可用**
+  是 provider 自己的责任
+
+### Requirement: StreamChunk 统一结构
+
+所有 provider 的流式响应 SHALL 被解析为统一的 `StreamChunk`：
+- `Type == "think"` → `Content` 字段是思考内容
+- `Type == "text"` → `Text` 字段是正文内容
+- 其它 `Type` SHALL 被 handler 当作未知忽略
+
+#### Scenario: yuanbao think chunk
+
+- **WHEN** `yuanbao.ParseStreamLine` 解析一行 `data: {"type":"think","content":"...思考..."}`
+- **THEN** 返回 `&StreamChunk{Type:"think", Content:"...思考..."}`
+
+#### Scenario: yuanbao text chunk
+
+- **WHEN** `yuanbao.ParseStreamLine` 解析一行 `data: {"type":"text","msg":"...正文..."}`
+- **THEN** 返回 `&StreamChunk{Type:"text", Text:"...正文..."}`
+
+#### Scenario: qwen / kimi 解析（占位）
+
+- **WHEN** `qwen.ParseStreamLine` / `kimi.ParseStreamLine` 解析任意输入
+- **THEN** 始终返回 `(nil, nil)`
+
+### Requirement: 站点管理面板 tab
+
+管理面板 SHALL 新增"站点管理"tab（在 dashboard / testing / config /
+info 之后），提供按 provider 的编辑 UI。
+
+#### Scenario: 列出所有 provider
+
+- **GIVEN** registry 含 yuanbao、qwen、kimi
+- **WHEN** 运维切到"站点管理"tab
+- **THEN** 面板渲染 3 个 provider 折叠面板（yuanbao、qwen、kimi），
+  每个显示状态徽章、启用复选框、按 provider 类型的 cookie 输入框
+  （yuanbao 用 hy_token/hy_user 双输入，qwen/kimi 用单输入）、
+  agentId（yuanbao 显示，其它灰）、maxConcurrency / queueTimeoutSeconds /
+  requestCooldownMs 三个数字输入、"保存此站点"按钮
+
+#### Scenario: 切换默认 provider
+
+- **WHEN** 运维在"默认 provider"下拉框选 `qwen` 并保存
+- **THEN** 面板 POST
+  `{ defaultProvider: "qwen" }` 到 `/api/config`，
+  后续 `/v1/models` 的顶层 `ownedBy` 缺省的 model 走 qwen
+
+#### Scenario: 启用一个 provider
+
+- **WHEN** 运维把 kimi 的"启用"复选框勾上并保存
+- **THEN** 面板 POST
+  `{ providers: { kimi: { enabled: true } } }` 到 `/api/config`
+- **AND** `GET /v1/models` 现在包含 kimi 的模型
+
+#### Scenario: 保存 yuanbao cookie
+
+- **WHEN** 运维在 yuanbao 的 hy_token 与 hy_user 输入框填值并点"保存此站点"
+- **THEN** 面板 POST
+  `{ providers: { yuanbao: { cookie: { hyToken, hyUser } } } }` 到 `/api/config`
+- **AND** 响应 200 时显示"已保存。点击'重启服务'按钮生效。"
+
+### Requirement: 兼容性
+
+`runtime_config.json` 旧顶层字段（`maxConcurrency` /
+`queueTimeoutSeconds` / `requestCooldownMs` / `yuanbaoCookie`）SHALL
+被自动迁移到 `providers.yuanbao` 形态；旧 `POST /api/config` 形态
+（含 `yuanbaoCookie` 等）SHALL 同样被翻译到新形态。两次翻译都不
+需要运维手改文件。
+
+#### Scenario: 旧文件无手改加载
+
+- **WHEN** `runtime_config.json` 含旧形态字段
+- **THEN** `LoadRuntimeConfig()` 返回的 `RuntimeConfig`
+  其 `Providers["yuanbao"]` 含 cookie / concurrency 等字段
+- **AND** `DefaultProvider == "yuanbao"`
+
+#### Scenario: 旧请求体被翻译
+
+- **WHEN** `POST /api/config` 收到旧形态请求
+- **THEN** handler 翻译为新形态后写入持久化
+- **AND** 响应体反映新形态（含 `providers`、`defaultProvider`）
 
