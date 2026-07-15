@@ -31,6 +31,7 @@ const App = {
         document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
         if (name === 'dashboard') { this.loadStatus(); this.loadLogs(); }
         if (name === 'config') { this.loadEnv(); }
+        if (name === 'sites') { this.loadSites(); }
         if (name === 'testing') {
             const ts = document.getElementById('testModelSelect');
             if (ts) ts.value = this.config.defaultModel;
@@ -521,6 +522,170 @@ const App = {
             setTimeout(poll, 1000);
         };
         setTimeout(poll, 1500); // 给重启 bat 留启动时间
+    },
+
+    // ---- "站点管理" tab (multi-provider) ----
+
+    async loadSites() {
+        try {
+            const res = await fetch('/api/env');
+            const data = await res.json();
+            const defaultProvider = data.defaultProvider || 'yuanbao';
+            const providers = data.providers || {};
+
+            // Populate the default provider select.
+            const sel = document.getElementById('defaultProviderSelect');
+            if (sel) {
+                sel.innerHTML = Object.keys(providers).map(n =>
+                    `<option value="${n}" ${n === defaultProvider ? 'selected' : ''}>${n}</option>`
+                ).join('');
+            }
+
+            // Render each provider's collapsible section.
+            const container = document.getElementById('providerSections');
+            if (container) {
+                container.innerHTML = Object.entries(providers).map(([name, p]) =>
+                    this._renderProviderSection(name, p)
+                ).join('');
+            }
+        } catch (e) {
+            console.error('loadSites failed:', e);
+        }
+    },
+
+    _renderProviderSection(name, p) {
+        const isYuanbao = name === 'yuanbao';
+        const configured = !!p.configured;
+        const enabled = !!p.enabled;
+        const statusBadge = (() => {
+            if (!enabled) return '<span style="color:#888;">⚪ 停用</span>';
+            if (isYuanbao && p.cookieSource === 'env') return '<span style="color:#0aa;">🟡 已配置 (env)</span>';
+            if (configured) return '<span style="color:#0a0;">🟢 已配置 (runtime)</span>';
+            if (isYuanbao) return '<span style="color:#ffa500;">🟡 未配置 (env)</span>';
+            return '<span style="color:#888;">⚪ 未配置</span>';
+        })();
+        const hyTokenValue = p.yuanbaoHyToken && p.yuanbaoHyToken !== '-' ? p.yuanbaoHyToken : '';
+        const hyUserValue = p.yuanbaoHyUser && p.yuanbaoHyUser !== '-' ? p.yuanbaoHyUser : '';
+        const cookieValue = p.cookieSource === 'env' ? '' : '';
+        const agentId = (p.agentId || '').replace(/\*\*\*\*$/, '');
+        const placeholder = isYuanbao ? '占位（未实现）' : '';
+        return `
+        <div class="section" data-provider="${name}" style="border:1px solid #333;border-radius:6px;padding:12px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div>
+                    <span style="font-weight:bold;font-size:14px;">${name}</span>
+                    <span style="margin-left:8px;">${statusBadge}</span>
+                    <span style="margin-left:8px;color:#888;font-size:11px;">${placeholder}</span>
+                </div>
+                <label class="toggle-pill"><input type="checkbox" id="site_enabled_${name}" ${enabled ? 'checked' : ''} onchange="App.saveProvider('${name}')"> 启用</label>
+            </div>
+            <div style="margin-top:8px;">
+                ${isYuanbao
+                    ? `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+                           <span style="font-size:12px;color:#0a0;font-weight:bold;min-width:90px;text-align:right;">hy_token</span>
+                           <input type="password" id="site_hyToken_${name}" class="config-input" style="flex:1;" placeholder="${hyTokenValue || '长串 base64'}">
+                       </div>
+                       <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+                           <span style="font-size:12px;color:#0a0;font-weight:bold;min-width:90px;text-align:right;">hy_user</span>
+                           <input type="password" id="site_hyUser_${name}" class="config-input" style="flex:1;" placeholder="${hyUserValue || '短 id'}">
+                       </div>`
+                    : `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+                           <span style="font-size:12px;color:#5af;font-weight:bold;min-width:90px;text-align:right;">cookie</span>
+                           <input type="password" id="site_cookie_${name}" class="config-input" style="flex:1;" placeholder="${cookieValue || 'cookie 值（占位 provider 暂不消费）'}">
+                       </div>`}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+                <span style="font-size:12px;color:#888;min-width:90px;text-align:right;">agentId</span>
+                <input type="text" id="site_agentId_${name}" class="config-input" style="flex:1;" value="${agentId}" placeholder="agent id" ${isYuanbao ? '' : 'disabled'}>
+            </div>
+            <div style="display:flex;gap:8px;margin:4px 0;flex-wrap:wrap;">
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="font-size:12px;color:#888;">maxC</span>
+                    <input type="number" id="site_maxC_${name}" class="config-input" style="width:80px;" min="1" max="1000" value="${p.maxConcurrency ?? ''}">
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="font-size:12px;color:#888;">qTimeout</span>
+                    <input type="number" id="site_qTimeout_${name}" class="config-input" style="width:80px;" min="1" max="3600" value="${p.queueTimeoutSeconds ?? ''}">
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;">
+                    <span style="font-size:12px;color:#888;">cooldown</span>
+                    <input type="number" id="site_cooldown_${name}" class="config-input" style="width:80px;" min="0" max="60000" value="${p.requestCooldownMs ?? ''}">
+                </div>
+            </div>
+            <div style="margin-top:8px;">
+                <button class="btn-sm" onclick="App.saveProvider('${name}')">保存此站点</button>
+            </div>
+        </div>`;
+    },
+
+    async saveProvider(name) {
+        const enabled = !!document.getElementById(`site_enabled_${name}`)?.checked;
+        const agentId = document.getElementById(`site_agentId_${name}`)?.value?.trim() || '';
+        const maxC = parseInt(document.getElementById(`site_maxC_${name}`)?.value, 10);
+        const qTimeout = parseInt(document.getElementById(`site_qTimeout_${name}`)?.value, 10);
+        const cooldown = parseInt(document.getElementById(`site_cooldown_${name}`)?.value, 10);
+
+        const provider = {};
+        if (document.getElementById(`site_enabled_${name}`)) provider.enabled = enabled;
+        if (agentId) provider.agentId = agentId;
+        if (Number.isInteger(maxC) && maxC > 0) provider.maxConcurrency = maxC;
+        if (Number.isInteger(qTimeout) && qTimeout > 0) provider.queueTimeoutSeconds = qTimeout;
+        if (Number.isInteger(cooldown) && cooldown >= 0) provider.requestCooldownMs = cooldown;
+
+        if (name === 'yuanbao') {
+            const hyToken = document.getElementById(`site_hyToken_${name}`)?.value?.trim();
+            const hyUser = document.getElementById(`site_hyUser_${name}`)?.value?.trim();
+            if (hyToken !== undefined || hyUser !== undefined) {
+                provider.cookie = {
+                    hyToken: hyToken || '',
+                    hyUser: hyUser || '',
+                };
+            }
+        } else {
+            const cookie = document.getElementById(`site_cookie_${name}`)?.value?.trim();
+            if (cookie !== undefined) {
+                provider.cookie = { hyToken: cookie, hyUser: '' };
+            }
+        }
+
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: this._authHeaders(),
+                body: JSON.stringify({ providers: { [name]: provider } }),
+            });
+            if (!res.ok) {
+                const payload = await res.json().catch(() => null);
+                alert('保存失败: ' + (payload?.error || ('HTTP ' + res.status)));
+                return;
+            }
+            alert('已保存。点击\'重启服务\'按钮使限流参数生效。');
+            this.loadSites();
+        } catch (e) {
+            alert('保存失败: ' + e.message);
+        }
+    },
+
+    async saveDefaultProvider() {
+        const sel = document.getElementById('defaultProviderSelect');
+        if (!sel) return;
+        const name = sel.value;
+        try {
+            const res = await fetch('/api/config', {
+                method: 'POST',
+                headers: this._authHeaders(),
+                body: JSON.stringify({ defaultProvider: name }),
+            });
+            if (!res.ok) {
+                const payload = await res.json().catch(() => null);
+                alert('保存失败: ' + (payload?.error || ('HTTP ' + res.status)));
+                return;
+            }
+            alert('默认 provider 已更新为 ' + name + '。点击\'重启服务\'按钮使整体生效。');
+            this.loadSites();
+        } catch (e) {
+            alert('保存失败: ' + e.message);
+        }
     },
 };
 

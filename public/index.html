@@ -17,6 +17,7 @@
             <div class="tab active" data-panel="dashboard">📊 仪表盘</div>
             <div class="tab" data-panel="testing">🧪 测试区</div>
             <div class="tab" data-panel="config">⚙️ 配置</div>
+            <div class="tab" data-panel="sites">🗂 站点管理</div>
             <div class="tab" data-panel="info">ℹ️ API 信息</div>
         </div>
 
@@ -198,6 +199,21 @@
                         <option value="hunyuan">Hunyuan - 全能处理</option>
                     </select>
                 </div>
+            </div>
+        </div>
+        <div class="panel" id="panel-sites">
+            <div class="section">
+                <div class="section-title">默认 provider</div>
+                <div class="config-row">
+                    <span class="config-label">当前默认:</span>
+                    <select id="defaultProviderSelect" class="config-input" style="width:160px;"></select>
+                    <button class="btn-sm" onclick="App.saveDefaultProvider()">保存</button>
+                </div>
+                <div style="color:#888;font-size:12px;margin-top:6px;">切换默认 provider 会影响 /v1/models 的顶层模型归属；点击'重启服务'按钮后整体生效。</div>
+            </div>
+            <div class="section">
+                <div class="section-title">已注册的 provider</div>
+                <div id="providerSections"></div>
             </div>
         </div>
         <div class="panel" id="panel-info">

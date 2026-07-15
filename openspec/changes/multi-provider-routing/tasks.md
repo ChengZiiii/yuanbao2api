@@ -148,20 +148,20 @@ checkbox。
 
 ## 12. 面板"站点管理" tab
 
-- [ ] 12.1 `public/index.html`：在 tab-bar 末尾追加
+- [x] 12.1 `public/index.html`：在 tab-bar 末尾追加
       `<div class="tab" data-panel="sites">🗂 站点管理</div>`。
-- [ ] 12.2 `public/index.html`：在 panel 列表末尾追加
+- [x] 12.2 `public/index.html`：在 panel 列表末尾追加
       `<div class="panel" id="panel-sites">` 容器（含默认 provider
       下拉框与 `providerSections` 容器）。
-- [ ] 12.3 `public/app.js`：新增 `loadSites()`：调 `GET /api/env`，
+- [x] 12.3 `public/app.js`：新增 `loadSites()`：调 `GET /api/env`，
       渲染默认 provider 下拉框 + 每个 provider 的折叠面板（按 provider
       名称决定 cookie UI：yuanbao 用 hy_token/hy_user 双输入，qwen/kimi
       用单输入）。
-- [ ] 12.4 `public/app.js`：新增 `saveProvider(name)`：读各 input
+- [x] 12.4 `public/app.js`：新增 `saveProvider(name)`：读各 input
       值，构造新形态 POST `/api/config`。
-- [ ] 12.5 `public/app.js`：新增 `saveDefaultProvider()`：调
+- [x] 12.5 `public/app.js`：新增 `saveDefaultProvider()`：调
       `POST /api/config { defaultProvider: <name> }`。
-- [ ] 12.6 `public/app.js`：tab 切换逻辑：当切到 `sites` 时调用
+- [x] 12.6 `public/app.js`：tab 切换逻辑：当切到 `sites` 时调用
       `loadSites()`。
 
 ## 13. 旧"配置" tab 适配新形态
