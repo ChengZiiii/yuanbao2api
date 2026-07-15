@@ -340,7 +340,25 @@ func handleOpenAIStream(c *gin.Context, resp *http.Response, model string, tools
 
 	select {
 	case <-done:
-		// Stream completed normally
+		if serr := scanner.Err(); serr != nil {
+			// Yuanbao accepted our headers (status was 200) but cut the
+			// stream mid-flight. Surface this to the client as an SSE
+			// error event so the operator can tell the difference between
+			// a clean completion, a 120s idle timeout, and an upstream
+			// connection drop.
+			log.Printf("Stream read error (OpenAI): status=%d err=%v", resp.StatusCode, serr)
+			c.Writer.Header().Set("Content-Type", "text/event-stream")
+			c.Writer.WriteHeader(http.StatusOK)
+			errPayload, _ := json.Marshal(map[string]string{
+				"error": fmt.Sprintf("upstream Yuanbao stream read failure (status=%d): %v", resp.StatusCode, serr),
+			})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", string(errPayload))
+			safeFlush(c.Writer)
+			fmt.Fprintf(c.Writer, "data: [DONE]\n\n")
+			safeFlush(c.Writer)
+			resp.Body.Close()
+			return
+		}
 	case <-streamTimeout.C:
 		log.Printf("Stream timeout (OpenAI): no data for 120s, forcing end")
 	}
@@ -412,7 +430,16 @@ func handleOpenAINonStream(c *gin.Context, resp *http.Response, model string, to
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read response"})
+		// Surface the actual upstream response (status + first ~200B of
+		// body) so the operator can tell whether the upstream sent a 4xx,
+		// a chunked-encoding error, or simply closed the connection. The
+		// previous "Failed to read response" string hid all three.
+		resp.Body.Close()
+		log.Printf("Yuanbao non-stream read failure: status=%d (partial body may be truncated) err=%v",
+			resp.StatusCode, err)
+		c.JSON(http.StatusBadGateway, gin.H{
+			"error": fmt.Sprintf("upstream Yuanbao read failure (status=%d): %v", resp.StatusCode, err),
+		})
 		return
 	}
 
