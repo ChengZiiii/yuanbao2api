@@ -79,20 +79,20 @@ checkbox。
 
 ## 6. HandleSetConfig 双形态
 
-- [ ] 6.1 `api/config.go`：`ServerConfigData` 增加 `DefaultProvider` 字段。
-- [ ] 6.2 `HandleSetConfig`：先检查 `body["providers"]`，存在则按
+- [x] 6.1 `api/config.go`：`ServerConfigData` 增加 `DefaultProvider` 字段。
+- [x] 6.2 `HandleSetConfig`：先检查 `body["providers"]`，存在则按
       新形态解析；否则检查 `body["yuanbaoCookie"]` 或
       `body["maxConcurrency"]` 等旧字段，存在则翻译为
       `Providers["yuanbao"]`；都没有则保留旧扁平字段（deepThinking 等）
       逻辑。
-- [ ] 6.3 新形态解析：每条 provider 配置按现有规则校验（cookie 必须
+- [x] 6.3 新形态解析：每条 provider 配置按现有规则校验（cookie 必须
       object、concurrency 范围等）。
-- [ ] 6.4 旧形态翻译：旧字段归 `Providers["yuanbao"]`，`Enabled` 默认
+- [x] 6.4 旧形态翻译：旧字段归 `Providers["yuanbao"]`，`Enabled` 默认
       true，`DefaultProvider = "yuanbao"`（仅当旧请求体明确指定
       `defaultProvider` 时才覆盖）。
-- [ ] 6.5 持久化路径：把 `Providers` 与 `DefaultProvider` 写入
+- [x] 6.5 持久化路径：把 `Providers` 与 `DefaultProvider` 写入
       `RuntimeConfig`，复用既有 `SaveRuntimeConfig` 流程。
-- [ ] 6.6 单元测试 `TestHandleSetConfig_*`：覆盖新形态保存、旧形态翻译、
+- [x] 6.6 单元测试 `TestHandleSetConfig_*`：覆盖新形态保存、旧形态翻译、
       双形态 no-op、类型错误 400、新形态下 Providers 缺省字段 no-op。
 
 ## 7. /api/env 升级

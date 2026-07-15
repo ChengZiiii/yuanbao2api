@@ -38,6 +38,19 @@ type ServerConfigData struct {
 	// HandleSetConfig collapses an all-empty object into nil so the field
 	// never carries a meaningless zero-value pointer.
 	YuanbaoCookie *YuanbaoCookie `json:"yuanbaoCookie"`
+
+	// DefaultProvider is the registry's default provider name
+	// (currently always "yuanbao"; the field is exposed so the
+	// panel can render the current selection without an extra
+	// fetch). Updated only via the new-shape /api/config body
+	// `{defaultProvider: "..."}`.
+	DefaultProvider string `json:"defaultProvider"`
+
+	// Providers holds the per-provider configuration map. This is the
+	// in-memory mirror of the on-disk RuntimeConfig.Providers; it is
+	// kept here so the GET /api/config response can render the full
+	// picture without an extra file read.
+	Providers map[string]ProviderConfig `json:"providers,omitempty"`
 }
 
 // getEnvInt reads an integer environment variable, falling back to def on
@@ -141,10 +154,22 @@ func HandleGetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, serverConfig)
 }
 
-// HandleSetConfig updates the server configuration. The request body is read
-// as a raw map so that omitted fields do NOT zero-out existing values
-// (avoids the Go zero-value pitfall when binding partial updates into a
-// struct).
+// HandleSetConfig updates the server configuration. The request body is
+// read as a raw map so that omitted fields do NOT zero-out existing
+// values (avoids the Go zero-value pitfall when binding partial updates
+// into a struct).
+//
+// The handler accepts three mutually-exclusive body shapes:
+//
+//  1. New form: {providers: {<name>: {...}}, defaultProvider: "..."}.
+//     Each provider block may carry enabled, cookie, agentId,
+//     maxConcurrency, queueTimeoutSeconds, requestCooldownMs.
+//  2. Legacy form: {yuanbaoCookie: {...}, maxConcurrency: N, ...}
+//     without a `providers` key. Translated to Providers["yuanbao"]
+//     before persistence.
+//  3. Flat form: {deepThinking, internetSearch, defaultModel,
+//     defaultProvider}. Used by the panel's feature toggles and
+//     default-model selector; does not touch providers[] at all.
 func HandleSetConfig(c *gin.Context) {
 	var body map[string]interface{}
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -152,7 +177,327 @@ func HandleSetConfig(c *gin.Context) {
 		return
 	}
 
-	var maxConcurrency *int
+	// 1) New shape: providers key present.
+	if _, hasProviders := body["providers"]; hasProviders {
+		handleSetConfigProviders(c, body)
+		return
+	}
+
+	// 2) Legacy shape: any of yuanbaoCookie / maxConcurrency /
+	//    queueTimeoutSeconds / requestCooldownMs present without a
+	//    providers key.
+	if isLegacyForm(body) {
+		handleSetConfigLegacy(c, body)
+		return
+	}
+
+	// 3) Flat shape (or empty body): the original partial-update
+	//    behavior for deepThinking / internetSearch / defaultModel /
+	//    agentId / defaultProvider stays intact.
+	handleSetConfigFlat(c, body)
+}
+
+// isLegacyForm reports whether the request body contains any of the
+// legacy flat keys and no providers key. The check is intentionally
+// lenient (any legacy key wins) so an empty body falls through to the
+// flat-shape branch.
+func isLegacyForm(body map[string]interface{}) bool {
+	for _, k := range []string{"yuanbaoCookie", "maxConcurrency", "queueTimeoutSeconds", "requestCooldownMs", "agentId"} {
+		if _, ok := body[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// handleSetConfigProviders applies the new-shape request body. Every
+// recognized field inside a provider block is validated; unknown
+// fields cause a 400 so future additions stay explicit.
+func handleSetConfigProviders(c *gin.Context, body map[string]interface{}) {
+	rawProviders, ok := body["providers"].(map[string]interface{})
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "providers must be an object"})
+		return
+	}
+
+	// Build a ProviderConfig for each entry (no provider mutates
+	// shared state yet; we apply under the global lock below).
+	type pendingProvider struct {
+		name   string
+		config ProviderConfig
+	}
+	var pending []pendingProvider
+
+	for name, rawCfg := range rawProviders {
+		obj, ok := rawCfg.(map[string]interface{})
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "providers." + name + " must be an object"})
+			return
+		}
+		cfg, errMsg := parseProviderConfig(name, obj)
+		if errMsg != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
+			return
+		}
+		pending = append(pending, pendingProvider{name: name, config: cfg})
+	}
+
+	// Determine the new defaultProvider (only honoured if explicitly
+	// supplied in this request; absent keeps the current default).
+	defaultProvider := ""
+	if v, ok := body["defaultProvider"]; ok {
+		s, isString := v.(string)
+		if !isString {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "defaultProvider must be a string"})
+			return
+		}
+		defaultProvider = s
+		if defaultProvider != "" {
+			if _, exists := rawProviders[defaultProvider]; !exists {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "defaultProvider '" + defaultProvider + "' is not in providers"})
+				return
+			}
+		}
+	}
+
+	// Apply under the global lock.
+	serverConfigLock.Lock()
+	defer serverConfigLock.Unlock()
+
+	if serverConfig.Providers == nil {
+		serverConfig.Providers = map[string]ProviderConfig{}
+	}
+
+	rateLimitChanged := false
+	cookieChanged := false
+
+	for _, p := range pending {
+		prev := serverConfig.Providers[p.name]
+		next := mergeProviderConfig(prev, p.config)
+
+		// Rate-limit change detection: any of the three rate-limit
+		// knobs changed for the yuanbao provider (the only one whose
+		// limiter exists today) triggers a restart.
+		if p.name == "yuanbao" {
+			if !intPtrEq(prev.MaxConcurrency, next.MaxConcurrency) ||
+				!intPtrEq(prev.QueueTimeoutSeconds, next.QueueTimeoutSeconds) ||
+				!intPtrEq(prev.RequestCooldownMs, next.RequestCooldownMs) {
+				rateLimitChanged = true
+				// Mirror the resolved values into serverConfig so the
+				// informational fields stay in sync.
+				if next.MaxConcurrency != nil {
+					serverConfig.MaxConcurrency = *next.MaxConcurrency
+				}
+				if next.QueueTimeoutSeconds != nil {
+					serverConfig.QueueTimeoutSeconds = *next.QueueTimeoutSeconds
+				}
+				if next.RequestCooldownMs != nil {
+					serverConfig.RequestCooldownMs = *next.RequestCooldownMs
+				}
+			}
+		}
+
+		// Cookie change detection for the hot-path (no restart).
+		if p.name == "yuanbao" && !cookiePtrEq(prev.Cookie, next.Cookie) {
+			cookieChanged = true
+			serverConfig.YuanbaoCookie = next.Cookie
+		}
+
+		if p.name == "yuanbao" && next.AgentID != nil {
+			serverConfig.AgentID = *next.AgentID
+		}
+
+		serverConfig.Providers[p.name] = next
+	}
+
+	if defaultProvider != "" {
+		serverConfig.DefaultProvider = defaultProvider
+	}
+
+	// Also handle flat defaultProvider (top-level) which may be sent
+	// without any providers block.
+	if v, ok := body["defaultProvider"]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			serverConfig.DefaultProvider = s
+		}
+	}
+
+	// Flat fields on the same request — accept the same partial
+	// updates the old handler accepted.
+	applyFlatFields(body, serverConfig)
+
+	// Persist.
+	if err := saveServerConfigAsRuntime(serverConfig); err != nil {
+		log.Printf("保存运行时配置失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist runtime config: " + err.Error()})
+		return
+	}
+
+	if rateLimitChanged {
+		log.Println("检测到限流参数变更，500ms 后自动重启以使新配置生效")
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			exitFn(0)
+		}()
+	} else if cookieChanged {
+		log.Println("Cookie 已更新，立即生效（无需重启）")
+	}
+
+	c.JSON(http.StatusOK, serverConfig)
+}
+
+// parseProviderConfig validates and converts a raw provider config
+// object into a typed ProviderConfig. On any validation failure it
+// returns a non-empty error message.
+func parseProviderConfig(name string, obj map[string]interface{}) (ProviderConfig, string) {
+	var cfg ProviderConfig
+	for k := range obj {
+		switch k {
+		case "enabled", "cookie", "agentId",
+			"maxConcurrency", "queueTimeoutSeconds", "requestCooldownMs":
+			// recognized
+		default:
+			return cfg, "providers." + name + " has unknown field: " + k
+		}
+	}
+	if v, ok := obj["enabled"]; ok {
+		b, isBool := v.(bool)
+		if !isBool {
+			return cfg, "providers." + name + ".enabled must be a boolean"
+		}
+		cfg.Enabled = &b
+	}
+	if v, ok := obj["cookie"]; ok {
+		yc, errMsg := parseYuanbaoCookieValue(v)
+		if errMsg != "" {
+			return cfg, "providers." + name + ".cookie: " + errMsg
+		}
+		cfg.Cookie = yc
+	}
+	if v, ok := obj["agentId"]; ok {
+		s, isString := v.(string)
+		if !isString {
+			return cfg, "providers." + name + ".agentId must be a string"
+		}
+		cfg.AgentID = &s
+	}
+	if v, ok := obj["maxConcurrency"]; ok {
+		n, valid := toInt(v)
+		if !valid || n < 1 || n > 1000 {
+			return cfg, "providers." + name + ".maxConcurrency out of range (1..1000)"
+		}
+		cfg.MaxConcurrency = &n
+	}
+	if v, ok := obj["queueTimeoutSeconds"]; ok {
+		n, valid := toInt(v)
+		if !valid || n < 1 || n > 3600 {
+			return cfg, "providers." + name + ".queueTimeoutSeconds out of range (1..3600)"
+		}
+		cfg.QueueTimeoutSeconds = &n
+	}
+	if v, ok := obj["requestCooldownMs"]; ok {
+		n, valid := toInt(v)
+		if !valid || n < 0 || n > 60000 {
+			return cfg, "providers." + name + ".requestCooldownMs out of range (0..60000)"
+		}
+		cfg.RequestCooldownMs = &n
+	}
+	return cfg, ""
+}
+
+// parseYuanbaoCookieValue accepts an object {hyToken, hyUser} or
+// null. Strings are rejected (legacy string form is migrated
+// upstream; the panel should always send the object form).
+func parseYuanbaoCookieValue(v interface{}) (*YuanbaoCookie, string) {
+	if v == nil {
+		return nil, ""
+	}
+	obj, isObject := v.(map[string]interface{})
+	if !isObject {
+		return nil, "must be an object"
+	}
+	for k := range obj {
+		if k != "hyToken" && k != "hyUser" {
+			return nil, "has unknown field: " + k
+		}
+	}
+	var hyToken, hyUser string
+	if raw, has := obj["hyToken"]; has {
+		s, isString := raw.(string)
+		if !isString {
+			return nil, "hyToken must be a string"
+		}
+		hyToken = s
+	}
+	if raw, has := obj["hyUser"]; has {
+		s, isString := raw.(string)
+		if !isString {
+			return nil, "hyUser must be a string"
+		}
+		hyUser = s
+	}
+	if hyToken == "" && hyUser == "" {
+		// explicit clear: produce a non-nil pointer with both fields
+		// empty so the merge step knows the user requested a clear
+		// (vs. the key being absent).
+		yc := YuanbaoCookie{}
+		return &yc, ""
+	}
+	return &YuanbaoCookie{HyToken: hyToken, HyUser: hyUser}, ""
+}
+
+// mergeProviderConfig overlays the new (request-supplied) ProviderConfig
+// on top of the previous one. A nil pointer in `next` means "do not
+// touch this field" — only non-nil pointers (including explicit clears
+// where the pointer is non-nil but the underlying value is empty) win.
+func mergeProviderConfig(prev, next ProviderConfig) ProviderConfig {
+	out := prev
+	if next.Enabled != nil {
+		out.Enabled = next.Enabled
+	}
+	if next.Cookie != nil {
+		out.Cookie = next.Cookie
+	}
+	if next.AgentID != nil {
+		out.AgentID = next.AgentID
+	}
+	if next.MaxConcurrency != nil {
+		out.MaxConcurrency = next.MaxConcurrency
+	}
+	if next.QueueTimeoutSeconds != nil {
+		out.QueueTimeoutSeconds = next.QueueTimeoutSeconds
+	}
+	if next.RequestCooldownMs != nil {
+		out.RequestCooldownMs = next.RequestCooldownMs
+	}
+	return out
+}
+
+func intPtrEq(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func cookiePtrEq(a, b *YuanbaoCookie) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// handleSetConfigLegacy translates the legacy {yuanbaoCookie, ...}
+// flat body to Providers["yuanbao"], then persists in the new shape.
+func handleSetConfigLegacy(c *gin.Context, body map[string]interface{}) {
+	// Extract the legacy fields first (no mutation yet).
+	var maxConcurrency, queueTimeoutSeconds, requestCooldownMs *int
 	if v, ok := body["maxConcurrency"]; ok {
 		n, valid := toInt(v)
 		if !valid || n < 1 || n > 1000 {
@@ -161,8 +506,6 @@ func HandleSetConfig(c *gin.Context) {
 		}
 		maxConcurrency = &n
 	}
-
-	var queueTimeoutSeconds *int
 	if v, ok := body["queueTimeoutSeconds"]; ok {
 		n, valid := toInt(v)
 		if !valid || n < 1 || n > 3600 {
@@ -171,8 +514,6 @@ func HandleSetConfig(c *gin.Context) {
 		}
 		queueTimeoutSeconds = &n
 	}
-
-	var requestCooldownMs *int
 	if v, ok := body["requestCooldownMs"]; ok {
 		n, valid := toInt(v)
 		if !valid || n < 0 || n > 60000 {
@@ -182,10 +523,6 @@ func HandleSetConfig(c *gin.Context) {
 		requestCooldownMs = &n
 	}
 
-	// yuanbaoCookie is optional. Presence of the key is what matters — its
-	// value (object with at least one non-empty field vs. all-empty/null/object)
-	// distinguishes "set" from "clear". The wire form is an object
-	// {hyToken, hyUser}; non-object values are rejected with HTTP 400.
 	var yuanbaoCookieSet bool
 	var yuanbaoCookieValue *YuanbaoCookie
 	if v, ok := body["yuanbaoCookie"]; ok {
@@ -214,8 +551,6 @@ func HandleSetConfig(c *gin.Context) {
 			}
 			hyUser = s
 		}
-		// Reject any unknown keys — keep the wire format strict so future
-		// additions stay explicit.
 		for k := range obj {
 			if k != "hyToken" && k != "hyUser" {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "yuanbaoCookie has unknown field: " + k})
@@ -229,106 +564,163 @@ func HandleSetConfig(c *gin.Context) {
 		}
 	}
 
+	var agentIDValue *string
+	if v, ok := body["agentId"]; ok {
+		s, isString := v.(string)
+		if !isString {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "agentId must be a string"})
+			return
+		}
+		if s != "" {
+			agentIDValue = &s
+		}
+	}
+
 	serverConfigLock.Lock()
 	defer serverConfigLock.Unlock()
 
-	// 原有字段：仅在 key 存在时更新
+	if serverConfig.Providers == nil {
+		serverConfig.Providers = map[string]ProviderConfig{}
+	}
+	yuanbao := serverConfig.Providers["yuanbao"]
+	prevMaxC, prevQT, prevCD := yuanbao.MaxConcurrency, yuanbao.QueueTimeoutSeconds, yuanbao.RequestCooldownMs
+	enabled := true
+	yuanbao.Enabled = &enabled
+
+	rateLimitChanged := false
+	if maxConcurrency != nil {
+		yuanbao.MaxConcurrency = maxConcurrency
+		serverConfig.MaxConcurrency = *maxConcurrency
+		rateLimitChanged = true
+	}
+	if queueTimeoutSeconds != nil {
+		yuanbao.QueueTimeoutSeconds = queueTimeoutSeconds
+		serverConfig.QueueTimeoutSeconds = *queueTimeoutSeconds
+		rateLimitChanged = true
+	}
+	if requestCooldownMs != nil {
+		yuanbao.RequestCooldownMs = requestCooldownMs
+		serverConfig.RequestCooldownMs = *requestCooldownMs
+		rateLimitChanged = true
+	}
+	if yuanbaoCookieSet {
+		yuanbao.Cookie = yuanbaoCookieValue
+		serverConfig.YuanbaoCookie = yuanbaoCookieValue
+	}
+	if agentIDValue != nil {
+		yuanbao.AgentID = agentIDValue
+		serverConfig.AgentID = *agentIDValue
+	}
+	serverConfig.Providers["yuanbao"] = yuanbao
+	if serverConfig.DefaultProvider == "" {
+		serverConfig.DefaultProvider = "yuanbao"
+	}
+	_ = prevMaxC
+	_ = prevQT
+	_ = prevCD
+
+	applyFlatFields(body, serverConfig)
+
+	if err := saveServerConfigAsRuntime(serverConfig); err != nil {
+		log.Printf("保存运行时配置失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist runtime config: " + err.Error()})
+		return
+	}
+
+	if rateLimitChanged {
+		log.Println("检测到限流参数变更，500ms 后自动重启以使新配置生效")
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			exitFn(0)
+		}()
+	} else if yuanbaoCookieSet {
+		log.Println("Cookie 已更新，立即生效（无需重启）")
+	}
+
+	c.JSON(http.StatusOK, serverConfig)
+}
+
+// handleSetConfigFlat preserves the original behavior for partial
+// updates to deepThinking / internetSearch / defaultModel /
+// defaultProvider / agentId when no providers[] block is present.
+func handleSetConfigFlat(c *gin.Context, body map[string]interface{}) {
+	serverConfigLock.Lock()
+	defer serverConfigLock.Unlock()
+
+	applyFlatFields(body, serverConfig)
+
+	// No provider fields were touched, so no persistence or restart
+	// is needed (mirrors the pre-change behavior).
+	c.JSON(http.StatusOK, serverConfig)
+}
+
+// applyFlatFields updates the flat (non-provider) fields of
+// serverConfig from the request body. Called by every branch.
+func applyFlatFields(body map[string]interface{}, sc *ServerConfigData) {
 	if v, ok := body["deepThinking"]; ok {
 		if b, ok := v.(bool); ok {
-			serverConfig.DeepThinking = b
+			sc.DeepThinking = b
 		}
 	}
 	if v, ok := body["internetSearch"]; ok {
 		if b, ok := v.(bool); ok {
-			serverConfig.InternetSearch = b
+			sc.InternetSearch = b
 		}
 	}
 	if v, ok := body["defaultModel"]; ok {
 		if s, ok := v.(string); ok && s != "" {
-			serverConfig.DefaultModel = s
+			sc.DefaultModel = s
 		}
 	}
-	if v, ok := body["agentId"]; ok {
+	if v, ok := body["defaultProvider"]; ok {
 		if s, ok := v.(string); ok && s != "" {
-			serverConfig.AgentID = s
+			sc.DefaultProvider = s
 		}
 	}
+}
 
-	changed := false
-	// rateLimitChanged tracks whether any of the three channel/time knobs
-	// changed. Changing those requires a process restart (the rate-limit
-	// semaphore channel cannot be resized in place). YuanbaoCookie is
-	// tracked separately because a cookie update can take effect
-	// immediately (the in-memory struct is replaced under the same lock
-	// that EffectiveYuanbaoCookie reads from) — no exit required.
-	rateLimitChanged := false
-	if maxConcurrency != nil {
-		serverConfig.MaxConcurrency = *maxConcurrency
-		changed = true
-		rateLimitChanged = true
+// saveServerConfigAsRuntime persists the current serverConfig as a
+// RuntimeConfig. Defaults are filled in for any missing pointer so the
+// on-disk file always round-trips through the new shape.
+func saveServerConfigAsRuntime(sc *ServerConfigData) error {
+	providers := map[string]ProviderConfig{}
+	for name, p := range sc.Providers {
+		providers[name] = p
 	}
-	if queueTimeoutSeconds != nil {
-		serverConfig.QueueTimeoutSeconds = *queueTimeoutSeconds
-		changed = true
-		rateLimitChanged = true
+	if entry, ok := providers["yuanbao"]; ok {
+		// Ensure enabled is always set when an entry exists so old
+		// reads still resolve the flag correctly.
+		if entry.Enabled == nil {
+			enabled := true
+			entry.Enabled = &enabled
+			providers["yuanbao"] = entry
+		}
 	}
-	if requestCooldownMs != nil {
-		serverConfig.RequestCooldownMs = *requestCooldownMs
-		changed = true
-		rateLimitChanged = true
-	}
-	if yuanbaoCookieSet {
-		serverConfig.YuanbaoCookie = yuanbaoCookieValue
-		changed = true
-	}
-
-	if changed {
-		maxConcurrency := serverConfig.MaxConcurrency
-		queueTimeoutSeconds := serverConfig.QueueTimeoutSeconds
-		requestCooldownMs := serverConfig.RequestCooldownMs
+	if len(providers) == 0 {
+		// Synthesize a minimum entry so an empty update still
+		// persists the current cookie + concurrency fields instead
+		// of dropping them.
+		maxC := sc.MaxConcurrency
+		qTimeout := sc.QueueTimeoutSeconds
+		cooldown := sc.RequestCooldownMs
 		enabled := true
-		cfg := RuntimeConfig{
-			Providers: map[string]ProviderConfig{
-				"yuanbao": {
-					Enabled:             &enabled,
-					Cookie:              serverConfig.YuanbaoCookie,
-					MaxConcurrency:      &maxConcurrency,
-					QueueTimeoutSeconds: &queueTimeoutSeconds,
-					RequestCooldownMs:   &requestCooldownMs,
-				},
-			},
-			DefaultProvider: "yuanbao",
-		}
-		if err := SaveRuntimeConfig(cfg); err != nil {
-			log.Printf("保存运行时配置失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist runtime config: " + err.Error()})
-			return
-		}
-		if rateLimitChanged {
-			// Channel capacity and the queue/cooldown timing are baked in
-			// at InitRateLimiter time. Save → exit so a fresh process
-			// picks them up; the supervisor (restart.bat / NSSM /
-			// systemd) is expected to respawn us. The 200 response
-			// flushes first.
-			log.Println("检测到限流参数变更，500ms 后自动重启以使新配置生效")
-			go func() {
-				time.Sleep(500 * time.Millisecond)
-				exitFn(0)
-			}()
-		} else if yuanbaoCookieSet {
-			// Cookie alone: already updated in memory under the same
-			// lock EffectiveYuanbaoCookie reads on every request, so the
-			// next upstream call uses the new value with zero delay. We
-			// deliberately do NOT call exitFn here so operators running
-			// via `go run .` in a terminal are not kicked back to the
-			// shell prompt; manual restart picks up the same persisted
-			// value next time (the disk write we just did is what makes
-			// that possible).
-			log.Println("Cookie 已更新，立即生效（无需重启）")
+		providers["yuanbao"] = ProviderConfig{
+			Enabled:             &enabled,
+			Cookie:              sc.YuanbaoCookie,
+			MaxConcurrency:      &maxC,
+			QueueTimeoutSeconds: &qTimeout,
+			RequestCooldownMs:   &cooldown,
 		}
 	}
-
-	c.JSON(http.StatusOK, serverConfig)
+	defaultProvider := sc.DefaultProvider
+	if defaultProvider == "" {
+		defaultProvider = "yuanbao"
+	}
+	cfg := RuntimeConfig{
+		Providers:       providers,
+		DefaultProvider: defaultProvider,
+	}
+	return SaveRuntimeConfig(cfg)
 }
 
 // toInt safely extracts an integer from a JSON-decoded value (numbers come
