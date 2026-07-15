@@ -141,10 +141,10 @@ checkbox。
 
 ## 11. 删除 yuanbao/ 顶层目录
 
-- [ ] 11.1 确认 `api/` 没有任何 import `"yuanbao2api/yuanbao"` 残留
+- [x] 11.1 确认 `api/` 没有任何 import `"yuanbao2api/yuanbao"` 残留
       （除 `providers/yuanbao` 间接引用）。
-- [ ] 11.2 删除 `yuanbao/` 目录（仅保留 `providers/yuanbao/`）。
-- [ ] 11.3 `go build ./...` 通过。
+- [x] 11.2 删除 `yuanbao/` 目录（仅保留 `providers/yuanbao/`）。
+- [x] 11.3 `go build ./...` 通过。
 
 ## 12. 面板"站点管理" tab
 
