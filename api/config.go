@@ -286,11 +286,18 @@ func HandleSetConfig(c *gin.Context) {
 		maxConcurrency := serverConfig.MaxConcurrency
 		queueTimeoutSeconds := serverConfig.QueueTimeoutSeconds
 		requestCooldownMs := serverConfig.RequestCooldownMs
+		enabled := true
 		cfg := RuntimeConfig{
-			MaxConcurrency:      &maxConcurrency,
-			QueueTimeoutSeconds: &queueTimeoutSeconds,
-			RequestCooldownMs:   &requestCooldownMs,
-			YuanbaoCookie:       serverConfig.YuanbaoCookie,
+			Providers: map[string]ProviderConfig{
+				"yuanbao": {
+					Enabled:             &enabled,
+					Cookie:              serverConfig.YuanbaoCookie,
+					MaxConcurrency:      &maxConcurrency,
+					QueueTimeoutSeconds: &queueTimeoutSeconds,
+					RequestCooldownMs:   &requestCooldownMs,
+				},
+			},
+			DefaultProvider: "yuanbao",
 		}
 		if err := SaveRuntimeConfig(cfg); err != nil {
 			log.Printf("保存运行时配置失败: %v", err)

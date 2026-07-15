@@ -15,11 +15,32 @@ func stringPointer(s string) *string {
 	return &s
 }
 
+func boolPointer(b bool) *bool {
+	return &b
+}
+
 // cookiePointer builds a *YuanbaoCookie for tests that previously used
 // *string. Centralised here so test cases do not have to repeat the
 // struct literal every time.
 func cookiePointer(hyToken, hyUser string) *YuanbaoCookie {
 	return &YuanbaoCookie{HyToken: hyToken, HyUser: hyUser}
+}
+
+// newYuanbaoRuntimeConfig builds the standard Providers["yuanbao"]
+// RuntimeConfig used by tests that exercise the new shape.
+func newYuanbaoRuntimeConfig(cookie *YuanbaoCookie, maxC, qTimeout, cooldown *int) RuntimeConfig {
+	return RuntimeConfig{
+		Providers: map[string]ProviderConfig{
+			"yuanbao": {
+				Enabled:             boolPointer(true),
+				Cookie:              cookie,
+				MaxConcurrency:      maxC,
+				QueueTimeoutSeconds: qTimeout,
+				RequestCooldownMs:   cooldown,
+			},
+		},
+		DefaultProvider: "yuanbao",
+	}
 }
 
 func TestSaveAndLoadRuntimeConfig(t *testing.T) {
@@ -28,34 +49,39 @@ func TestSaveAndLoadRuntimeConfig(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	// 保存
-	cfg := RuntimeConfig{
-		MaxConcurrency:      intPointer(5),
-		QueueTimeoutSeconds: intPointer(90),
-		RequestCooldownMs:   intPointer(250),
-	}
+	maxC := 5
+	qTimeout := 90
+	cooldown := 250
+	cfg := newYuanbaoRuntimeConfig(nil, &maxC, &qTimeout, &cooldown)
 	if err := SaveRuntimeConfig(cfg); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
 	// 加载
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency == nil || *loaded.MaxConcurrency != 5 {
-		t.Errorf("MaxConcurrency: got %v, want 5", loaded.MaxConcurrency)
+	yuanbao, ok := loaded.Providers["yuanbao"]
+	if !ok {
+		t.Fatalf("Providers[yuanbao] missing after load")
 	}
-	if loaded.QueueTimeoutSeconds == nil || *loaded.QueueTimeoutSeconds != 90 {
-		t.Errorf("QueueTimeoutSeconds: got %v, want 90", loaded.QueueTimeoutSeconds)
+	if yuanbao.MaxConcurrency == nil || *yuanbao.MaxConcurrency != 5 {
+		t.Errorf("MaxConcurrency: got %v, want 5", yuanbao.MaxConcurrency)
 	}
-	if loaded.RequestCooldownMs == nil || *loaded.RequestCooldownMs != 250 {
-		t.Errorf("RequestCooldownMs: got %v, want 250", loaded.RequestCooldownMs)
+	if yuanbao.QueueTimeoutSeconds == nil || *yuanbao.QueueTimeoutSeconds != 90 {
+		t.Errorf("QueueTimeoutSeconds: got %v, want 90", yuanbao.QueueTimeoutSeconds)
+	}
+	if yuanbao.RequestCooldownMs == nil || *yuanbao.RequestCooldownMs != 250 {
+		t.Errorf("RequestCooldownMs: got %v, want 250", yuanbao.RequestCooldownMs)
 	}
 
 	// A later atomic save must replace the existing file on every supported OS.
-	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: intPointer(6)}); err != nil {
+	maxC2 := 6
+	if err := SaveRuntimeConfig(newYuanbaoRuntimeConfig(nil, &maxC2, nil, nil)); err != nil {
 		t.Fatalf("SaveRuntimeConfig replacement failed: %v", err)
 	}
 	replaced := LoadRuntimeConfig()
-	if replaced.MaxConcurrency == nil || *replaced.MaxConcurrency != 6 {
-		t.Errorf("replacement MaxConcurrency: got %v, want 6", replaced.MaxConcurrency)
+	if replaced.Providers["yuanbao"].MaxConcurrency == nil ||
+		*replaced.Providers["yuanbao"].MaxConcurrency != 6 {
+		t.Errorf("replacement MaxConcurrency: got %v, want 6", replaced.Providers["yuanbao"].MaxConcurrency)
 	}
 }
 
@@ -63,8 +89,8 @@ func TestLoadRuntimeConfig_MissingFile(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", filepath.Join(t.TempDir(), "nope.json"))
 
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != nil || loaded.QueueTimeoutSeconds != nil || loaded.RequestCooldownMs != nil {
-		t.Errorf("expected zero-valued config when file missing, got %+v", loaded)
+	if loaded.DefaultProvider != "" || loaded.Providers != nil {
+		t.Errorf("expected empty config when file missing, got %+v", loaded)
 	}
 }
 
@@ -77,8 +103,8 @@ func TestLoadRuntimeConfig_CorruptFile(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != nil {
-		t.Errorf("expected zero-valued config when file corrupt, got %+v", loaded)
+	if loaded.Providers != nil {
+		t.Errorf("expected empty config when file corrupt, got %+v", loaded)
 	}
 }
 
@@ -91,8 +117,8 @@ func TestLoadRuntimeConfig_TypeErrorDiscardsPartialDecode(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency != nil || loaded.QueueTimeoutSeconds != nil || loaded.RequestCooldownMs != nil {
-		t.Errorf("expected type error to discard all partially decoded values, got %+v", loaded)
+	if loaded.Providers != nil {
+		t.Errorf("expected type error to discard partially decoded values, got %+v", loaded)
 	}
 }
 
@@ -109,7 +135,8 @@ func TestSaveRuntimeConfig_WriteFailurePreservesTarget(t *testing.T) {
 		t.Fatalf("failed to block temporary file path: %v", err)
 	}
 
-	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: intPointer(9)}); err == nil {
+	maxC := 9
+	if err := SaveRuntimeConfig(newYuanbaoRuntimeConfig(nil, &maxC, nil, nil)); err == nil {
 		t.Fatal("SaveRuntimeConfig should report a temporary write failure")
 	}
 
@@ -143,22 +170,21 @@ func TestSaveAndLoadRuntimeConfig_RoundTripYuanbaoCookie(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	cookie := cookiePointer("abc12345supersecret", "user-xyz")
-	cfg := RuntimeConfig{
-		MaxConcurrency:      intPointer(5),
-		QueueTimeoutSeconds: intPointer(90),
-		RequestCooldownMs:   intPointer(250),
-		YuanbaoCookie:       cookie,
-	}
+	maxC := 5
+	qTimeout := 90
+	cooldown := 250
+	cfg := newYuanbaoRuntimeConfig(cookie, &maxC, &qTimeout, &cooldown)
 	if err := SaveRuntimeConfig(cfg); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie == nil {
-		t.Fatalf("YuanbaoCookie: got nil, want %+v", cookie)
+	yuanbao := loaded.Providers["yuanbao"]
+	if yuanbao.Cookie == nil {
+		t.Fatalf("Cookie: got nil, want %+v", cookie)
 	}
-	if loaded.YuanbaoCookie.HyToken != "abc12345supersecret" || loaded.YuanbaoCookie.HyUser != "user-xyz" {
-		t.Errorf("YuanbaoCookie: got %+v, want %+v", loaded.YuanbaoCookie, cookie)
+	if yuanbao.Cookie.HyToken != "abc12345supersecret" || yuanbao.Cookie.HyUser != "user-xyz" {
+		t.Errorf("Cookie: got %+v, want %+v", yuanbao.Cookie, cookie)
 	}
 
 	// The on-disk JSON must contain the canonical object form. Match
@@ -178,7 +204,8 @@ func TestSaveAndLoadRuntimeConfig_RoundTripYuanbaoCookie(t *testing.T) {
 
 func TestLoadRuntimeConfig_LegacyYuanbaoCookieString(t *testing.T) {
 	// Simulate a runtime_config.json written during the runtime-cookie
-	// transition where yuanbaoCookie was stored as a flat string.
+	// transition where yuanbaoCookie was stored as a flat string. The
+	// new UnmarshalJSON translates it into Providers["yuanbao"].Cookie.
 	path := filepath.Join(t.TempDir(), "runtime_config.json")
 	legacy := []byte(`{"yuanbaoCookie":"hy_token=legacy; hy_user=old"}`)
 	if err := os.WriteFile(path, legacy, 0600); err != nil {
@@ -187,39 +214,48 @@ func TestLoadRuntimeConfig_LegacyYuanbaoCookieString(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie == nil {
-		t.Fatalf("YuanbaoCookie should have been parsed from legacy string, got nil")
+	yuanbao, ok := loaded.Providers["yuanbao"]
+	if !ok {
+		t.Fatalf("legacy string should populate Providers[yuanbao]")
 	}
-	if loaded.YuanbaoCookie.HyToken != "legacy" {
-		t.Errorf("HyToken: got %q, want %q", loaded.YuanbaoCookie.HyToken, "legacy")
+	if yuanbao.Cookie == nil {
+		t.Fatalf("Cookie should have been parsed from legacy string, got nil")
 	}
-	if loaded.YuanbaoCookie.HyUser != "old" {
-		t.Errorf("HyUser: got %q, want %q", loaded.YuanbaoCookie.HyUser, "old")
+	if yuanbao.Cookie.HyToken != "legacy" {
+		t.Errorf("HyToken: got %q, want %q", yuanbao.Cookie.HyToken, "legacy")
+	}
+	if yuanbao.Cookie.HyUser != "old" {
+		t.Errorf("HyUser: got %q, want %q", yuanbao.Cookie.HyUser, "old")
+	}
+	if loaded.DefaultProvider != "yuanbao" {
+		t.Errorf("DefaultProvider: got %q want yuanbao", loaded.DefaultProvider)
 	}
 }
 
-func TestLoadRuntimeConfig_ObjectYuanbaoCookie(t *testing.T) {
+func TestLoadRuntimeConfig_NewForm(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	original := cookiePointer("obj-token", "obj-user")
-	if err := SaveRuntimeConfig(RuntimeConfig{YuanbaoCookie: original}); err != nil {
+	if err := SaveRuntimeConfig(newYuanbaoRuntimeConfig(original, nil, nil, nil)); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie == nil {
-		t.Fatalf("YuanbaoCookie: got nil after object round-trip")
+	yuanbao, ok := loaded.Providers["yuanbao"]
+	if !ok || yuanbao.Cookie == nil {
+		t.Fatalf("Cookie: got nil after object round-trip")
 	}
-	if loaded.YuanbaoCookie.HyToken != "obj-token" || loaded.YuanbaoCookie.HyUser != "obj-user" {
-		t.Errorf("YuanbaoCookie: got %+v, want %+v", loaded.YuanbaoCookie, original)
+	if yuanbao.Cookie.HyToken != "obj-token" || yuanbao.Cookie.HyUser != "obj-user" {
+		t.Errorf("Cookie: got %+v, want %+v", yuanbao.Cookie, original)
 	}
 }
 
 func TestLoadRuntimeConfig_LegacyFileWithoutYuanbaoCookie(t *testing.T) {
 	// Simulate a runtime_config.json written before this feature existed.
-	// The "yuanbaoCookie" key is absent; deserialization must yield nil.
+	// The "yuanbaoCookie" key is absent; deserialization must still
+	// yield Providers["yuanbao"] with the concurrency fields.
 	path := filepath.Join(t.TempDir(), "runtime_config.json")
 	legacy := []byte(`{"maxConcurrency":4,"queueTimeoutSeconds":60,"requestCooldownMs":100}`)
 	if err := os.WriteFile(path, legacy, 0600); err != nil {
@@ -228,11 +264,30 @@ func TestLoadRuntimeConfig_LegacyFileWithoutYuanbaoCookie(t *testing.T) {
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie != nil {
-		t.Errorf("legacy file should yield nil YuanbaoCookie, got %q", *loaded.YuanbaoCookie)
+	yuanbao, ok := loaded.Providers["yuanbao"]
+	if !ok {
+		t.Fatalf("legacy file should populate Providers[yuanbao]")
 	}
-	if loaded.MaxConcurrency == nil || *loaded.MaxConcurrency != 4 {
-		t.Errorf("legacy file: MaxConcurrency not loaded correctly: %+v", loaded.MaxConcurrency)
+	if yuanbao.Cookie != nil {
+		t.Errorf("legacy file without yuanbaoCookie should yield nil cookie, got %+v", yuanbao.Cookie)
+	}
+	if yuanbao.MaxConcurrency == nil || *yuanbao.MaxConcurrency != 4 {
+		t.Errorf("legacy file: MaxConcurrency not migrated: %+v", yuanbao.MaxConcurrency)
+	}
+}
+
+func TestLoadRuntimeConfig_EmptyProviders(t *testing.T) {
+	// File with neither providers nor legacy fields. UnmarshalJSON
+	// recognises this as the empty new shape and produces Providers=nil.
+	path := filepath.Join(t.TempDir(), "runtime_config.json")
+	if err := os.WriteFile(path, []byte(`{}`), 0600); err != nil {
+		t.Fatalf("failed to write empty config: %v", err)
+	}
+	t.Setenv("RUNTIME_CONFIG_PATH", path)
+
+	loaded := LoadRuntimeConfig()
+	if loaded.Providers != nil {
+		t.Errorf("empty file should yield Providers=nil, got %+v", loaded.Providers)
 	}
 }
 

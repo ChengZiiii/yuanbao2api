@@ -66,16 +66,16 @@ checkbox。
 
 ## 5. RuntimeConfig 升级
 
-- [ ] 5.1 `api/config_persist.go`：`RuntimeConfig` 改为
+- [x] 5.1 `api/config_persist.go`：`RuntimeConfig` 改为
       `{Providers map[string]ProviderConfig, DefaultProvider string}`。
-- [ ] 5.2 新增 `ProviderConfig` 结构：`Enabled, Cookie *YuanbaoCookie,
+- [x] 5.2 新增 `ProviderConfig` 结构：`Enabled, Cookie *YuanbaoCookie,
       AgentID *string, MaxConcurrency, QueueTimeoutSeconds,
       RequestCooldownMs *int`，全部带 `omitempty`。
-- [ ] 5.3 实现 `RuntimeConfig.UnmarshalJSON` 双形态（详 design.md §4）。
-- [ ] 5.4 单元测试 `TestRuntimeConfig_LegacyFields`：旧形态
+- [x] 5.3 实现 `RuntimeConfig.UnmarshalJSON` 双形态（详 design.md §4）。
+- [x] 5.4 单元测试 `TestRuntimeConfig_LegacyFields`：旧形态
       `{maxConcurrency, yuanbaoCookie: {...}}` 加载后归到
       `Providers["yuanbao"]`。
-- [ ] 5.5 单元测试 `TestRuntimeConfig_NewForm`：新形态 round-trip。
+- [x] 5.5 单元测试 `TestRuntimeConfig_NewForm`：新形态 round-trip。
 
 ## 6. HandleSetConfig 双形态
 

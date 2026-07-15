@@ -36,7 +36,8 @@ func TestInitRateLimiter_RuntimeConfigOverridesEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path) // must precede Save
-	if err := SaveRuntimeConfig(RuntimeConfig{MaxConcurrency: intPointer(8)}); err != nil {
+	maxC := 8
+	if err := SaveRuntimeConfig(newYuanbaoRuntimeConfig(nil, &maxC, nil, nil)); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
@@ -54,7 +55,8 @@ func TestInitRateLimiter_ZeroRuntimeValuesIgnored(t *testing.T) {
 	tmpDir := t.TempDir()
 	path := filepath.Join(tmpDir, "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path) // must precede Save
-	if err := SaveRuntimeConfig(RuntimeConfig{QueueTimeoutSeconds: intPointer(0)}); err != nil {
+	qTimeout := 0
+	if err := SaveRuntimeConfig(newYuanbaoRuntimeConfig(nil, nil, &qTimeout, nil)); err != nil {
 		t.Fatalf("SaveRuntimeConfig failed: %v", err)
 	}
 
@@ -69,7 +71,7 @@ func TestInitRateLimiter_RuntimeCooldownZeroOverridesEnv(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "runtime_config.json")
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
-	if err := os.WriteFile(path, []byte(`{"requestCooldownMs":0}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"providers":{"yuanbao":{"requestCooldownMs":0}}}`), 0600); err != nil {
 		t.Fatalf("failed to write runtime config: %v", err)
 	}
 

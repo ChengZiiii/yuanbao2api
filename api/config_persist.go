@@ -81,14 +81,128 @@ func (c *YuanbaoCookie) HeaderValue() string {
 	return strings.Join(parts, "; ")
 }
 
-// RuntimeConfig holds runtime-persisted shared server configuration. Values
-// here override env-derived defaults at startup and survive service restarts.
-type RuntimeConfig struct {
+// ProviderConfig is the per-provider configuration block stored
+// inside RuntimeConfig.Providers[<name>]. All pointer fields are
+// optional (omitempty); when omitted the underlying runtime falls
+// back to env vars and built-in defaults.
+type ProviderConfig struct {
+	Enabled             *bool          `json:"enabled,omitempty"`
+	Cookie              *YuanbaoCookie `json:"cookie,omitempty"`
+	AgentID             *string        `json:"agentId,omitempty"`
 	MaxConcurrency      *int           `json:"maxConcurrency,omitempty"`
 	QueueTimeoutSeconds *int           `json:"queueTimeoutSeconds,omitempty"`
 	RequestCooldownMs   *int           `json:"requestCooldownMs,omitempty"`
-	YuanbaoCookie       *YuanbaoCookie `json:"yuanbaoCookie,omitempty"`
 }
+
+// RuntimeConfig holds the persisted multi-provider runtime config.
+// The on-disk shape is always the new form; legacy flat shapes are
+// auto-translated to Providers["yuanbao"] by UnmarshalJSON so old
+// runtime_config.json files load without manual migration.
+type RuntimeConfig struct {
+	Providers       map[string]ProviderConfig `json:"providers,omitempty"`
+	DefaultProvider string                    `json:"defaultProvider,omitempty"`
+}
+
+// UnmarshalJSON accepts both the new {providers, defaultProvider}
+// shape and the legacy {yuanbaoCookie, maxConcurrency, ...} flat
+// shape. The legacy shape is translated to Providers["yuanbao"] +
+// DefaultProvider = "yuanbao" ONLY when at least one legacy field is
+// present; an empty file (`{}`) yields an empty RuntimeConfig
+// (Providers nil, DefaultProvider ""), matching the spec's
+// "向后兼容加载" scenario.
+func (rc *RuntimeConfig) UnmarshalJSON(data []byte) error {
+	// 1) Try the canonical new shape.
+	type alias RuntimeConfig
+	var s alias
+	if err := json.Unmarshal(data, &s); err == nil && s.Providers != nil {
+		*rc = RuntimeConfig(s)
+		return nil
+	}
+	// 2) Fall back to the legacy flat shape.
+	var legacy struct {
+		MaxConcurrency      *int           `json:"maxConcurrency,omitempty"`
+		QueueTimeoutSeconds *int           `json:"queueTimeoutSeconds,omitempty"`
+		RequestCooldownMs   *int           `json:"requestCooldownMs,omitempty"`
+		YuanbaoCookie       *YuanbaoCookie `json:"yuanbaoCookie,omitempty"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	// Only synthesize Providers["yuanbao"] when at least one legacy
+	// field was actually present. An empty `{}` file must produce a
+	// zero-value RuntimeConfig.
+	if legacy.MaxConcurrency == nil && legacy.QueueTimeoutSeconds == nil &&
+		legacy.RequestCooldownMs == nil && legacy.YuanbaoCookie == nil {
+		*rc = RuntimeConfig{}
+		return nil
+	}
+	rc.Providers = map[string]ProviderConfig{
+		"yuanbao": {
+			Enabled:             ptrBool(true),
+			Cookie:              legacy.YuanbaoCookie,
+			MaxConcurrency:      legacy.MaxConcurrency,
+			QueueTimeoutSeconds: legacy.QueueTimeoutSeconds,
+			RequestCooldownMs:   legacy.RequestCooldownMs,
+		},
+	}
+	rc.DefaultProvider = "yuanbao"
+	return nil
+}
+
+// YuanbaoCookie is a helper accessor: returns the Cookie block of
+// Providers["yuanbao"], or nil if no yuanbao entry exists. Kept for
+// back-compat with handlers that pre-date the providers[] layout.
+func (rc *RuntimeConfig) YuanbaoCookieField() *YuanbaoCookie {
+	if rc == nil || rc.Providers == nil {
+		return nil
+	}
+	if p, ok := rc.Providers["yuanbao"]; ok {
+		return p.Cookie
+	}
+	return nil
+}
+
+// MaxConcurrencyField returns the yuanbao MaxConcurrency value (or
+// nil when not set) so older callers that read the flat pointer still
+// work.
+func (rc *RuntimeConfig) MaxConcurrencyField() *int {
+	if rc == nil || rc.Providers == nil {
+		return nil
+	}
+	if p, ok := rc.Providers["yuanbao"]; ok {
+		return p.MaxConcurrency
+	}
+	return nil
+}
+
+// QueueTimeoutSecondsField returns the yuanbao QueueTimeoutSeconds
+// value (or nil when not set).
+func (rc *RuntimeConfig) QueueTimeoutSecondsField() *int {
+	if rc == nil || rc.Providers == nil {
+		return nil
+	}
+	if p, ok := rc.Providers["yuanbao"]; ok {
+		return p.QueueTimeoutSeconds
+	}
+	return nil
+}
+
+// RequestCooldownMsField returns the yuanbao RequestCooldownMs
+// value (or nil when not set).
+func (rc *RuntimeConfig) RequestCooldownMsField() *int {
+	if rc == nil || rc.Providers == nil {
+		return nil
+	}
+	if p, ok := rc.Providers["yuanbao"]; ok {
+		return p.RequestCooldownMs
+	}
+	return nil
+}
+
+// ptrBool returns a *bool pointing to v. Tiny helper so the legacy
+// translation in UnmarshalJSON can populate Enabled: true without
+// pulling in a generic helper package.
+func ptrBool(v bool) *bool { return &v }
 
 // runtimeConfigPath returns the file path used to persist RuntimeConfig. The
 // path can be overridden by the RUNTIME_CONFIG_PATH env var (mainly for tests).

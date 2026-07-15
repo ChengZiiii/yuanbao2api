@@ -252,14 +252,14 @@ func InitLimiterManager() *LimiterManager {
 	if cooldown < 0 {
 		cooldown = 0
 	}
-	if rc.MaxConcurrency != nil && *rc.MaxConcurrency > 0 {
-		maxC = *rc.MaxConcurrency
+	if rc.MaxConcurrencyField() != nil && *rc.MaxConcurrencyField() > 0 {
+		maxC = *rc.MaxConcurrencyField()
 	}
-	if rc.QueueTimeoutSeconds != nil && *rc.QueueTimeoutSeconds > 0 {
-		qTimeout = *rc.QueueTimeoutSeconds
+	if rc.QueueTimeoutSecondsField() != nil && *rc.QueueTimeoutSecondsField() > 0 {
+		qTimeout = *rc.QueueTimeoutSecondsField()
 	}
-	if rc.RequestCooldownMs != nil && *rc.RequestCooldownMs >= 0 {
-		cooldown = *rc.RequestCooldownMs
+	if rc.RequestCooldownMsField() != nil && *rc.RequestCooldownMsField() >= 0 {
+		cooldown = *rc.RequestCooldownMsField()
 	}
 
 	globalManager = NewLimiterManager()
@@ -286,8 +286,8 @@ func InitLimiterManager() *LimiterManager {
 	serverConfig.MaxConcurrency = maxC
 	serverConfig.QueueTimeoutSeconds = qTimeout
 	serverConfig.RequestCooldownMs = cooldown
-	if rc.YuanbaoCookie != nil {
-		serverConfig.YuanbaoCookie = rc.YuanbaoCookie
+	if rc.YuanbaoCookieField() != nil {
+		serverConfig.YuanbaoCookie = rc.YuanbaoCookieField()
 	}
 	serverConfigLock.Unlock()
 

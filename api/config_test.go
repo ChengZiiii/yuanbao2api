@@ -227,9 +227,13 @@ func TestHandleSetConfig_PersistsRuntimeConfig(t *testing.T) {
 
 	// 文件应被写入
 	loaded := LoadRuntimeConfig()
-	if loaded.MaxConcurrency == nil || *loaded.MaxConcurrency != 3 ||
-		loaded.QueueTimeoutSeconds == nil || *loaded.QueueTimeoutSeconds != 80 ||
-		loaded.RequestCooldownMs == nil || *loaded.RequestCooldownMs != 400 {
+	yuanbao, ok := loaded.Providers["yuanbao"]
+	if !ok {
+		t.Fatalf("Providers[yuanbao] missing after save")
+	}
+	if yuanbao.MaxConcurrency == nil || *yuanbao.MaxConcurrency != 3 ||
+		yuanbao.QueueTimeoutSeconds == nil || *yuanbao.QueueTimeoutSeconds != 80 ||
+		yuanbao.RequestCooldownMs == nil || *yuanbao.RequestCooldownMs != 400 {
 		t.Errorf("runtime_config.json not persisted correctly: %+v", loaded)
 	}
 }
@@ -321,11 +325,11 @@ func TestHandleSetConfig_SavesYuanbaoCookie(t *testing.T) {
 	}
 
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie == nil {
+	if loaded.Providers["yuanbao"].Cookie == nil {
 		t.Fatalf("persisted YuanbaoCookie: got nil")
 	}
-	if loaded.YuanbaoCookie.HyToken != "abc12345supersecret" || loaded.YuanbaoCookie.HyUser != "user-xyz" {
-		t.Errorf("persisted YuanbaoCookie: got %+v, want {abc12345supersecret user-xyz}", loaded.YuanbaoCookie)
+	if loaded.Providers["yuanbao"].Cookie.HyToken != "abc12345supersecret" || loaded.Providers["yuanbao"].Cookie.HyUser != "user-xyz" {
+		t.Errorf("persisted YuanbaoCookie: got %+v, want {abc12345supersecret user-xyz}", loaded.Providers["yuanbao"].Cookie)
 	}
 }
 
@@ -359,8 +363,8 @@ func TestHandleSetConfig_EmptyYuanbaoCookieClearsRuntimeOverride(t *testing.T) {
 	// nil. With the pointer+omitempty tag, that means the key is absent
 	// from the JSON.
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie != nil {
-		t.Errorf("persisted YuanbaoCookie: expected nil after clear, got %+v", loaded.YuanbaoCookie)
+	if loaded.Providers["yuanbao"].Cookie != nil {
+		t.Errorf("persisted YuanbaoCookie: expected nil after clear, got %+v", loaded.Providers["yuanbao"].Cookie)
 	}
 
 	// EffectiveYuanbaoCookie should now fall back to env (or "" if unset).
@@ -377,7 +381,13 @@ func TestHandleSetConfig_OmittedYuanbaoCookieIsNoOp(t *testing.T) {
 
 	// Seed a runtime cookie both in memory and on disk.
 	seed := cookiePointer("do-not-touch-tok", "do-not-touch-usr")
-	if err := SaveRuntimeConfig(RuntimeConfig{YuanbaoCookie: seed}); err != nil {
+	enabled := true
+	if err := SaveRuntimeConfig(RuntimeConfig{
+		Providers: map[string]ProviderConfig{
+			"yuanbao": {Enabled: &enabled, Cookie: seed},
+		},
+		DefaultProvider: "yuanbao",
+	}); err != nil {
 		t.Fatalf("failed to seed runtime config: %v", err)
 	}
 	serverConfigLock.Lock()
@@ -385,9 +395,9 @@ func TestHandleSetConfig_OmittedYuanbaoCookieIsNoOp(t *testing.T) {
 	serverConfigLock.Unlock()
 
 	// Sanity: the file actually has the seeded cookie.
-	if loaded := LoadRuntimeConfig(); loaded.YuanbaoCookie == nil ||
-		loaded.YuanbaoCookie.HyToken != seed.HyToken || loaded.YuanbaoCookie.HyUser != seed.HyUser {
-		t.Fatalf("seed failed: got %+v", loaded.YuanbaoCookie)
+	if loaded := LoadRuntimeConfig(); loaded.Providers["yuanbao"].Cookie == nil ||
+		loaded.Providers["yuanbao"].Cookie.HyToken != seed.HyToken || loaded.Providers["yuanbao"].Cookie.HyUser != seed.HyUser {
+		t.Fatalf("seed failed: got %+v", loaded.Providers["yuanbao"].Cookie)
 	}
 
 	// Request without yuanbaoCookie but with an unrelated change.
@@ -414,9 +424,9 @@ func TestHandleSetConfig_OmittedYuanbaoCookieIsNoOp(t *testing.T) {
 	// The spec scenario explicitly forbids rewriting the file in a way that
 	// would clear the cookie. Reload and confirm the cookie is still there.
 	loaded := LoadRuntimeConfig()
-	if loaded.YuanbaoCookie == nil ||
-		loaded.YuanbaoCookie.HyToken != seed.HyToken || loaded.YuanbaoCookie.HyUser != seed.HyUser {
-		t.Errorf("persisted YuanbaoCookie: expected preserved %+v, got %+v", seed, loaded.YuanbaoCookie)
+	if loaded.Providers["yuanbao"].Cookie == nil ||
+		loaded.Providers["yuanbao"].Cookie.HyToken != seed.HyToken || loaded.Providers["yuanbao"].Cookie.HyUser != seed.HyUser {
+		t.Errorf("persisted YuanbaoCookie: expected preserved %+v, got %+v", seed, loaded.Providers["yuanbao"].Cookie)
 	}
 }
 
