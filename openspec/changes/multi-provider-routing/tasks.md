@@ -18,22 +18,22 @@ checkbox。
 
 ## 2. 迁 yuanbao → providers/yuanbao/
 
-- [ ] 2.1 把 `yuanbao/client.go` 整体迁到 `providers/yuanbao/client.go`，
+- [x] 2.1 把 `yuanbao/client.go` 整体迁到 `providers/yuanbao/client.go`，
       包名 `yuanbao` 保留。
-- [ ] 2.2 新增 `providers/yuanbao/provider.go`：实现 `Provider` 接口
+- [x] 2.2 新增 `providers/yuanbao/provider.go`：实现 `Provider` 接口
       的 6 个方法；`Name = "yuanbao"`；`Models()` 至少含 `deep_seek_v3`、
       `hunyuan` 两个 ModelInfo。
 - [ ] 2.3 把 `api/config.go` 的 `EffectiveYuanbaoCookie()` + `EffectiveYuanbaoCookieSource()`
       + `CookieSource*` 迁移到 `providers/yuanbao/provider.go`（或单独
       `cookie.go`），包内方法。
-- [ ] 2.4 yuanbao provider 的 `BuildPrompt` 把 `api/openai.go` 当前的
+- [x] 2.4 yuanbao provider 的 `BuildPrompt` 把 `api/openai.go` 当前的
       `utils.ConvertMessagesToYuanbaoPrompt` 包装调用；
       `Anthropic` 风格单独写一个 build。
-- [ ] 2.5 yuanbao provider 的 `NewRequest` 包装 `buildYuanbaoRequest`。
-- [ ] 2.6 yuanbao provider 的 `ParseStreamLine` 把当前 `YuanbaoResponseChunk`
+- [x] 2.5 yuanbao provider 的 `NewRequest` 包装 `buildYuanbaoRequest`。
+- [x] 2.6 yuanbao provider 的 `ParseStreamLine` 把当前 `YuanbaoResponseChunk`
       翻译为 `StreamChunk{Type, Content, Text}`（`Msg` → `Text`）。
-- [ ] 2.7 yuanbao provider 的 `Send` 包装 `Client.SendRequestWithID`。
-- [ ] 2.8 单元测试 `TestYuanbaoProvider_*`：Name、Models、BuildPrompt、
+- [x] 2.7 yuanbao provider 的 `Send` 包装 `Client.SendRequestWithID`。
+- [x] 2.8 单元测试 `TestYuanbaoProvider_*`：Name、Models、BuildPrompt、
       ParseStreamLine（含 think/text 两种）、Send 错误传播。
 
 ## 3. qwen / kimi 占位
