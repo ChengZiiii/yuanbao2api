@@ -255,17 +255,27 @@ func HandleSetConfig(c *gin.Context) {
 	}
 
 	changed := false
+	// rateLimitChanged tracks whether any of the three channel/time knobs
+	// changed. Changing those requires a process restart (the rate-limit
+	// semaphore channel cannot be resized in place). YuanbaoCookie is
+	// tracked separately because a cookie update can take effect
+	// immediately (the in-memory struct is replaced under the same lock
+	// that EffectiveYuanbaoCookie reads from) — no exit required.
+	rateLimitChanged := false
 	if maxConcurrency != nil {
 		serverConfig.MaxConcurrency = *maxConcurrency
 		changed = true
+		rateLimitChanged = true
 	}
 	if queueTimeoutSeconds != nil {
 		serverConfig.QueueTimeoutSeconds = *queueTimeoutSeconds
 		changed = true
+		rateLimitChanged = true
 	}
 	if requestCooldownMs != nil {
 		serverConfig.RequestCooldownMs = *requestCooldownMs
 		changed = true
+		rateLimitChanged = true
 	}
 	if yuanbaoCookieSet {
 		serverConfig.YuanbaoCookie = yuanbaoCookieValue
@@ -287,17 +297,28 @@ func HandleSetConfig(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist runtime config: " + err.Error()})
 			return
 		}
-		// All four fields that flip `changed = true` (YuanbaoCookie +
-		// the three rate-limit knobs) only take effect on the next
-		// process start. Save → exit so the operator does not have to
-		// click the separate Restart button. The process is expected
-		// to be wrapped by restart.bat (or any supervisor) which will
-		// respawn it within a second. The 200 response flushes first.
-		log.Println("检测到运行时配置已变更，500ms 后自动重启以使新配置生效")
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			exitFn(0)
-		}()
+		if rateLimitChanged {
+			// Channel capacity and the queue/cooldown timing are baked in
+			// at InitRateLimiter time. Save → exit so a fresh process
+			// picks them up; the supervisor (restart.bat / NSSM /
+			// systemd) is expected to respawn us. The 200 response
+			// flushes first.
+			log.Println("检测到限流参数变更，500ms 后自动重启以使新配置生效")
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				exitFn(0)
+			}()
+		} else if yuanbaoCookieSet {
+			// Cookie alone: already updated in memory under the same
+			// lock EffectiveYuanbaoCookie reads on every request, so the
+			// next upstream call uses the new value with zero delay. We
+			// deliberately do NOT call exitFn here so operators running
+			// via `go run .` in a terminal are not kicked back to the
+			// shell prompt; manual restart picks up the same persisted
+			// value next time (the disk write we just did is what makes
+			// that possible).
+			log.Println("Cookie 已更新，立即生效（无需重启）")
+		}
 	}
 
 	c.JSON(http.StatusOK, serverConfig)

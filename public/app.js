@@ -313,101 +313,12 @@ const App = {
                 alert('保存失败: ' + message);
                 return;
             }
-            alert('已保存，服务将自动重启，页面将在几秒后刷新...');
-            // 服务会在保存后约 500ms 自动重启（restart.bat / 进程管理器会拉起新进程），
-            // 这里开始轮询 /health 直到服务恢复，然后整页 reload，以便 /api/env 显示最新 cookieSource。
-            this._pollUntilReadyAndReload();
+            alert('已保存，cookie 立即生效。');
+            // 限流参数变更才会触发进程重启；cookie 是热切换的，留在当前页面即可。
+            // 页面右上角的「环境」表会继续显示 cookieSource。
         } catch (e) {
             alert('保存失败: ' + e.message);
         }
-    },
-
-    /**
-     * Lenient legacy parser. Returns { hyToken, hyUser } extracted from any
-     * composite "hy_token=...; hy_user=..." form found in the inputs.
-     * Returns null if no composite was found (caller keeps the raw values).
-     */
-    _extractLegacyParts(rawValues) {
-        let hyToken = null, hyUser = null;
-        for (const raw of rawValues) {
-            if (!raw || raw.indexOf('=') < 0) continue;
-            // Only treat as legacy composite if it explicitly uses `hy_token=` or `hy_user=`.
-            // A bare token (base64 with no '=' connection) won't match.
-            if (!/hy_token\s*=|hy_user\s*=/.test(raw)) continue;
-            for (const pair of raw.split(/[;\n]/)) {
-                const idx = pair.indexOf('=');
-                if (idx <= 0) continue;
-                const k = pair.slice(0, idx).trim();
-                const v = pair.slice(idx + 1).trim();
-                if (k === 'hy_token' && v) hyToken = v;
-                else if (k === 'hy_user' && v) hyUser = v;
-            }
-            if (hyToken || hyUser) break;
-        }
-        if (!hyToken && !hyUser) return null;
-        return { hyToken: hyToken || '', hyUser: hyUser || '' };
-    },
-
-    /**
-     * Called by the onpaste handler of the "paste full cookie" helper input.
-     * Splits the composite form into the two component inputs and clears
-     * itself. The caller still has to click "保存 Cookie" to persist.
-     */
-    fillFromFullCookie() {
-        const full = document.getElementById('yuanbaoFullCookieInput');
-        const tk = document.getElementById('yuanbaoHyTokenInput');
-        const us = document.getElementById('yuanbaoHyUserInput');
-        if (!full || !tk || !us) return;
-        const legacy = this._extractLegacyParts([full.value]);
-        if (!legacy) {
-            alert('没识别到 hy_token / hy_user 键。请把 DevTools 中完整的 cookie 头整段粘到这里。');
-            return;
-        }
-        tk.value = legacy.hyToken;
-        us.value = legacy.hyUser;
-        full.value = '';
-        alert('已自动拆分：hy_token (长串) → 上框；hy_user (短 id) → 下框。检查后点「保存 Cookie」。');
-    },
-
-    toggleCookieVisibility(visible) {
-        const tokenInput = document.getElementById('yuanbaoHyTokenInput');
-        const userInput = document.getElementById('yuanbaoHyUserInput');
-        const fullInput = document.getElementById('yuanbaoFullCookieInput');
-        const nextType = visible ? 'text' : 'password';
-        if (tokenInput) tokenInput.type = nextType;
-        if (userInput) userInput.type = nextType;
-        if (fullInput) fullInput.type = nextType;
-    },
-
-    copyEndpoint(btn, text) {
-        navigator.clipboard.writeText(text).then(() => {
-            btn.textContent = '✅';
-            setTimeout(() => btn.textContent = '📋', 1500);
-        }).catch(() => {
-            // Fallback for non-HTTPS
-            const input = btn.previousElementSibling;
-            if (input && input.select) {
-                input.select();
-                document.execCommand('copy');
-            }
-        });
-    },
-
-    async loadLogs() {
-        try {
-            const res = await fetch('/api/logs');
-            const logs = await res.json();
-            const tbody = document.getElementById('logBody');
-            if (!tbody) return;
-            if (!logs || logs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" style="color:#666;text-align:center;">暂无数据</td></tr>';
-                return;
-            }
-            tbody.innerHTML = logs.map(log => {
-                const cls = log.status >= 400 ? 'status-bad' : log.status >= 300 ? 'status-warn' : 'status-ok';
-                return '<tr><td>' + (log.time || '') + '</td><td><span class="method-tag">' + (log.method || '') + '</span></td><td>' + (log.model || '-') + '</td><td><span class="' + cls + '">' + (log.status || '') + '</span></td><td>' + (log.duration || '') + '</td><td style="color:#666;">' + (log.note || '') + '</td></tr>';
-            }).join('');
-        } catch(e) {}
     },
 
     async saveConcurrency() {
@@ -457,9 +368,10 @@ const App = {
     },
 
     async _pollUntilReadyAndReload() {
-        // Service was auto-restarted after saveCookie / saveConcurrency.
-        // Wait for /health to come back, then full-reload so /api/env
-        // displays the new runtime values (cookieSource etc.).
+        // Concurrency-rate-limit save (the only config change that
+        // currently triggers an auto-restart). Cookie saves are taken
+        // live in memory without exiting the process, so they don't go
+        // through this path.
         const deadline = Date.now() + 15000;
         while (Date.now() < deadline) {
             try {
