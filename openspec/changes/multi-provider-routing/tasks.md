@@ -97,12 +97,12 @@ checkbox。
 
 ## 7. /api/env 升级
 
-- [ ] 7.1 `api/env.go`：响应增加 `defaultProvider`（string）与
+- [x] 7.1 `api/env.go`：响应增加 `defaultProvider`（string）与
       `providers`（object：每 provider 包含 `name, enabled,
       cookieSource, yuanbaoCookie, yuanbaoHyToken, yuanbaoHyUser`）。
-- [ ] 7.2 保留旧顶层 `yuanbaoCookie` / `yuanbaoHyToken` /
+- [x] 7.2 保留旧顶层 `yuanbaoCookie` / `yuanbaoHyToken` /
       `yuanbaoHyUser` / `cookieSource`（取自 `defaultProvider`）。
-- [ ] 7.3 单元测试 `TestHandleEnv_MultiProvider`：覆盖多 provider
+- [x] 7.3 单元测试 `TestHandleEnv_MultiProvider`：覆盖多 provider
       摘要、env 兜底来源报告。
 
 ## 8. /api/status 升级
