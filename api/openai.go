@@ -88,6 +88,16 @@ func HandleOpenAIChatCompletion(c *gin.Context) {
 		return
 	}
 
+	// Spec scenario "命中但 provider 停用": if the matching provider
+	// is explicitly disabled in RuntimeConfig.Providers, refuse the
+	// request. We do this here (rather than inside Registry.Route) so
+	// /v1/models can still enumerate the provider's model list while
+	// the chat endpoints reject calls to it.
+	if !providerEnabled(prov.Name()) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "provider disabled: " + prov.Name()})
+		return
+	}
+
 	// Per-provider concurrency gate. Held for the entire critical
 	// section (upstream call + stream/non-stream response writing)
 	// and released via defer. Excess requests block in FIFO order

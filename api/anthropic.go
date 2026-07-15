@@ -91,6 +91,14 @@ func HandleAnthropicMessages(c *gin.Context) {
 		return
 	}
 
+	if !providerEnabled(prov.Name()) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"type":  "error",
+			"error": map[string]string{"type": "api_error", "message": "provider disabled: " + prov.Name()},
+		})
+		return
+	}
+
 	rl := GetLimiterManager().For(prov.Name())
 	if err := rl.Acquire(c.Request.Context()); err != nil {
 		log.Printf("Rate limit: rejecting Anthropic request (queue full/timeout) on %s: %v", prov.Name(), err)

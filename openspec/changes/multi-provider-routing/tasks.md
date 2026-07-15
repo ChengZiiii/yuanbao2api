@@ -178,6 +178,17 @@ checkbox。
 
 ## 14. 端到端验证
 
+## 15. (Post-verify) Spec scenario "命中但 provider 停用"
+
+- [x] 15.1 `api/openai.go` `HandleOpenAIChatCompletion` 在 `Route(model)`
+      之后检查 `providerEnabled(prov.Name())`，命中已停用的 provider
+      返回 HTTP 503 `{"error":"provider disabled: <name>"}`。
+- [x] 15.2 `api/anthropic.go` `HandleAnthropicMessages` 同样检查 +
+      Anthropic 错误信封。
+- [x] 15.3 单元测试 `TestHandleOpenAI_DisabledProviderRejected` +
+      `TestHandleAnthropic_DisabledProviderRejected`：覆盖停用 → 503
+      路径。
+
 - [ ] 14.1 `go build ./...` 通过。
 - [ ] 14.2 `go test ./... -count=1` 全部通过（含新 Provider 抽象、
       Registry 路由、LimiterManager、RuntimeConfig 双形态、Handler 双形态、
