@@ -53,15 +53,15 @@ checkbox。
 
 ## 4. LimiterManager
 
-- [ ] 4.1 改 `api/ratelimit.go`：删除 `globalRateLimiter` 进程级单例，
+- [x] 4.1 改 `api/ratelimit.go`：删除 `globalRateLimiter` 进程级单例，
       引入 `limiterManager *LimiterManager`。
-- [ ] 4.2 `LimiterManager` 实现：
+- [x] 4.2 `LimiterManager` 实现：
       - `For(name string) *RateLimiter`：懒构造 + `sync.Once` per name；
       - 未知 name 返回 pass-through limiter（`maxConcurrency = 1<<30`）。
-- [ ] 4.3 `InitRateLimiter()` 改为 `InitLimiterManager()`：不再构造
+- [x] 4.3 `InitRateLimiter()` 改为 `InitLimiterManager()`：不再构造
       单例 `RateLimiter`，改为构造空 `LimiterManager`。
-- [ ] 4.4 暴露 `GetLimiterManager()` 替代 `GetRateLimiter()`。
-- [ ] 4.5 单元测试 `TestLimiterManager_For`：覆盖每个 provider 独立
+- [x] 4.4 暴露 `GetLimiterManager()` 替代 `GetRateLimiter()`。
+- [x] 4.5 单元测试 `TestLimiterManager_For`：覆盖每个 provider 独立
       limiter、未知 name pass-through、并发首次构造只触发一次。
 
 ## 5. RuntimeConfig 升级
